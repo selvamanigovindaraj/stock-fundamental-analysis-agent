@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend lint format typecheck test check docker-up docker-down clean
+.PHONY: install dev-backend dev-frontend lint format typecheck test check eval-filings-rag docker-up docker-down clean
 
 install:
 	uv sync --extra dev
@@ -24,6 +24,11 @@ test:
 	uv run pytest
 
 check: lint typecheck test
+
+eval-filings-rag:
+	uv sync --extra eval
+	uv run python scripts/evaluate_filings_rag.py
+	uv sync --extra dev
 
 docker-up:
 	docker compose up --build -d

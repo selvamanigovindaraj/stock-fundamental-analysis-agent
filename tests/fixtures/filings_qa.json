@@ -1,0 +1,27 @@
+[
+  {
+    "question": "Why did Apple's net sales in Greater China decrease in fiscal year 2025 compared to fiscal year 2024?",
+    "ticker": "AAPL",
+    "reference_answer": "Greater China net sales decreased primarily due to lower net sales of iPhone, partially offset by higher net sales of Mac."
+  },
+  {
+    "question": "Where does Apple's manufacturing primarily take place, and what risk does this create?",
+    "ticker": "AAPL",
+    "reference_answer": "Apple's manufacturing is performed in whole or in part by outsourcing partners located primarily in China mainland, India, Japan, South Korea, Taiwan and Vietnam. This creates risk because restrictions on international trade, such as tariffs and other controls on imports or exports, can materially adversely affect Apple's business and supply chain, especially since a significant portion of its revenue and supply chain operations are concentrated in these regions."
+  },
+  {
+    "question": "What new U.S. tariffs were announced during fiscal year 2025 that affected Apple, and how did other countries respond?",
+    "ticker": "AAPL",
+    "reference_answer": "Beginning in the second quarter of fiscal 2025, new U.S. tariffs were announced, including additional tariffs on imports from China, India, Japan, South Korea, Taiwan, Vietnam and the EU. In response, several countries imposed or threatened to impose reciprocal tariffs on imports from the U.S. and other retaliatory measures."
+  },
+  {
+    "question": "How is Apple's fiscal year structured?",
+    "ticker": "AAPL",
+    "reference_answer": "Apple's fiscal year is the 52- or 53-week period ending on the last Saturday of September. An additional week is included in the first fiscal quarter every five or six years to realign fiscal quarters with calendar quarters; this occurred in the first quarter of fiscal 2023. Fiscal years 2025 and 2024 each spanned 52 weeks, while fiscal year 2023 spanned 53 weeks."
+  },
+  {
+    "question": "What was Apple's total net sales for fiscal year 2025, and how did it compare to fiscal year 2024?",
+    "ticker": "AAPL",
+    "reference_answer": "Apple's total net sales for fiscal year 2025 were $416,161 million, a 6% increase compared to fiscal year 2024's total net sales of $391,035 million."
+  }
+]

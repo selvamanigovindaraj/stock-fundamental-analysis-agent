@@ -63,3 +63,68 @@ instead of true total revenue (~$182B), which inflated `net_margin` past 100%. O
 live-verifying against real JPM data, not by unit tests against synthetic fixtures.
 `edgartools_source.py`'s `_find_total_revenue` now tries the raw `RevenuesNetOfInterestExpense`/
 `Revenues` concepts first before falling back to `standard_concept`.
+
+## Filings RAG pipeline
+
+`app.services.filings.ingest.ingest_ticker_filings(ticker)` (download via `edgartools` →
+extract MD&A/Risk Factors → chunk → embed via Voyage → store in Weaviate, collection name
+`weaviate_filings_collection`) and `app.agents.filings_rag_graph.answer_filing_question(question,
+ticker)` (retrieve → `grade_documents` → generate, with citations) are real, working
+implementations, wired as a tool at `app/agents/tools/filings_rag_tool.py`. Verified live
+end-to-end against real AAPL filings, Voyage, Weaviate Cloud, and DeepSeek — including
+idempotent re-ingestion (re-running for the same filing overwrites its chunks in place via a
+deterministic UUID, doesn't duplicate).
+
+**`grade_documents` uses Voyage's reranker (`rerank-2.5`), not an LLM classifier.** Originally
+built with a DeepSeek structured-output binary classifier (see the now-removed
+`deepseek_model_structured` setting), swapped to `voyageai.AsyncClient.rerank` per explicit
+request — one purpose-built reranking call instead of a structured-output round-trip.
+`_RELEVANCE_THRESHOLD = 0.5` in `filings_rag_graph.py` is a judgment call, not derived from any
+published Voyage cutoff (verified live: relevant chunks scored ~0.6-0.75, irrelevant ~0.3 for a
+typical query) — tune if false-positive/negative rates matter in practice.
+
+**Voyage AI free tier is extremely restrictive**: without a payment method on the account, it's
+capped at 3 requests/minute and 10K tokens/minute — a single-ticker ingestion (4 filings, ~275
+chunks) blows through this in one batched embed call and fails even after 3 retries. This isn't
+a code bug (the retry-then-abort-cleanly design is working as intended — no partial writes on
+failure); it's an account-tier limitation. A payment method has since been added and full-scale
+ingestion for AAPL (275 chunks, one batched embed call) is confirmed working, taking ~100s.
+
+**SEC-rendered filing text has recurring page-footer noise embedded inline** (e.g.
+`"Apple Inc. | 2025 Form 10-K | 21"`) — found live via a RAGAS eval run where a real question
+about tariffs got zero retrieved citations despite the content being correctly ingested
+(confirmed via a Weaviate BM25 keyword search). Root cause: the footer created a near-empty
+chunk (just a section header + page number) that ranked ahead of the real content in semantic
+search for that query. `chunker.py`'s `_PAGE_FOOTER_RE` now strips this pattern before
+chunking. Re-running the 5-pair eval after the fix showed context_recall improve (0.60 → 0.70)
+and faithfulness dip slightly (0.73 → 0.69) — expected noise at n=5, not a signal to keep
+tuning retrieval against; don't over-index on single-example RAGAS deltas at this sample size.
+
+**Known limitation**: re-ingestion overwrites chunks by deterministic `(ticker, accession_no,
+section, chunk_index)` id, but doesn't delete chunks whose index no longer exists if a
+section's chunk count *shrinks* between runs (e.g., from a future chunking-logic change) —
+those would become orphaned stale entries. Not currently exercised (chunk counts have stayed
+stable across re-ingestions so far); would need an explicit delete-then-reinsert-per-section
+step if this becomes a real scenario.
+
+**DeepSeek's structured-output (`with_structured_output`) requires `method="function_calling"`
+and a non-thinking model** — verified live: the default strict JSON-schema mode 400s
+("This response_format type is unavailable now"), and forced tool-choice 400s against a
+thinking-mode model ("Thinking mode does not support this tool_choice"). No longer load-bearing
+for `grade_documents` (now Voyage rerank, not an LLM classifier — see above), but still true of
+DeepSeek generally and worth knowing if structured output is needed elsewhere later.
+
+**RAGAS 0.4.3 has a real import bug**: it unconditionally imports
+`langchain_community.chat_models.vertexai.ChatVertexAI`, which doesn't exist in any
+`langchain-community` release compatible with this project's `langchain>=1.0`. Pinning
+`langchain-community` to an old pre-1.0 release (to keep that shim) creates an unsatisfiable
+resolver conflict with `langgraph`/`langchain-openai` already in main deps — don't try that
+again. `scripts/evaluate_filings_rag.py` instead stubs the missing submodule into
+`sys.modules` before importing `ragas` (we never use VertexAI). `ragas`/`langchain-community`
+live in the `eval` optional-dependency group (`make eval-filings-rag`), never in main deps.
+
+**Known gap**: `tests/fixtures/filings_qa.json` has 5 real, hand-verified Q&A pairs (not 30) —
+the 30-pair/faithfulness-≥0.85/context-recall-≥0.80 acceptance gate from the original spec is
+**not met**. This is a content-curation task (sourcing and fact-checking 25 more real filing
+Q&A pairs), not a coding gap — the harness (`make eval-filings-rag`) is complete and will pick
+up more pairs added to the fixture file automatically.

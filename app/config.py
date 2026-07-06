@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     # Weaviate Cloud
     weaviate_url: str = ""
     weaviate_api_key: str = ""
-    weaviate_class_name: str = "StockFundamentalIndex"
+    weaviate_filings_collection: str = "FilingSection"
+
+    # Voyage AI (embeddings + reranking)
+    voyage_api_key: str = ""
+    voyage_embedding_model: str = "voyage-3"
+    voyage_rerank_model: str = "rerank-2.5"
 
     # Tavily
     tavily_api_key: str = ""

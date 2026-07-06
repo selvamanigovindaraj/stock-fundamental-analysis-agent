@@ -82,6 +82,38 @@ class FinancialStatements(BaseModel):
     is_gaap: bool
 
 
+class FilingDocument(BaseModel):
+    """A single extracted section (MD&A or Risk Factors) from one 10-K/10-Q filing."""
+
+    ticker: str
+    form_type: Literal["10-K", "10-Q"]
+    period: str
+    accession_no: str
+    filing_url: str
+    section: Literal["mdna", "risk_factors"]
+    text: str
+
+
+class Chunk(BaseModel):
+    """A single chunk of a FilingDocument, ready for embedding."""
+
+    text: str
+    ticker: str
+    form_type: Literal["10-K", "10-Q"]
+    period: str
+    section: Literal["mdna", "risk_factors"]
+    accession_no: str
+    filing_url: str
+    chunk_index: int
+
+
+class FilingsRAGAnswer(BaseModel):
+    """Answer to a natural-language question about a company's filings, with citations."""
+
+    answer: str
+    citations: list[Document] = []
+
+
 class FundamentalRatios(BaseModel):
     """Fundamental ratios computed from a FinancialStatements snapshot."""
 

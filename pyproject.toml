@@ -17,6 +17,10 @@ dependencies = [
     "edgartools>=3.0",
     "httpx>=0.27.0",
     "langsmith>=0.9.0",
+    "langchain-text-splitters>=1.1.2",
+    "langchain-voyageai>=0.4.0",
+    "voyageai>=0.4.1",
+    "tenacity>=9.1.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +30,18 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.11.0",
     "pre-commit>=3.8.0",
+]
+# ragas==0.4.3 transitively imports langchain_community.chat_models.vertexai, which no
+# longer exists in any langchain-community release compatible with this project's already-
+# resolved langchain>=1.0 (verified: pinning langchain-community to an old pre-1.0 release
+# to keep that shim creates an unsatisfiable resolver conflict against langchain-text-
+# splitters/langgraph/langchain-openai already used elsewhere). Fixed instead with a small
+# sys.modules stub in scripts/evaluate_filings_rag.py before importing ragas -- we never use
+# VertexAI, so a stub is enough. Quarantined here (not in main deps) since this never runs in
+# `make check`/CI and costs real money.
+eval = [
+    "ragas==0.4.3",
+    "langchain-community",
 ]
 
 [build-system]
