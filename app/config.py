@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
+
+    model_config = SettingsConfigDict(env_file=".env")
 
     # DeepSeek (OpenAI-compatible API)
     deepseek_api_key: str = ""
@@ -22,11 +24,15 @@ class Settings(BaseSettings):
     # Tavily
     tavily_api_key: str = ""
 
+    # SEC EDGAR
+    sec_edgar_user_agent: str = ""
+
+    # LangSmith
+    langsmith_api_key: str = ""
+    langsmith_project: str = "stock-fundamental-analyser"
+
     # App
     environment: str = "development"
-
-    class Config:
-        env_file = ".env"
 
 
 @lru_cache

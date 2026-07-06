@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 interface InputBarProps {
   onSend: (message: string) => void;
 }

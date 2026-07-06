@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { ChatMessage } from "../types";
 
 interface MessageBubbleProps {

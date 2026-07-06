@@ -26,7 +26,7 @@ test:
 check: lint typecheck test
 
 docker-up:
-	docker compose up --build
+	docker compose up --build -d
 
 docker-down:
 	docker compose down

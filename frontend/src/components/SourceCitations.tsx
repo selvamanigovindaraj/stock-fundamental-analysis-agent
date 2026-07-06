@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { Document } from "../types";
 
 interface SourceCitationsProps {
