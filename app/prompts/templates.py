@@ -1,0 +1,7 @@
+from __future__ import annotations
+
+SYSTEM_PROMPT_TEMPLATE = ""
+
+ROUTING_PROMPT_TEMPLATE = ""
+
+FUNDAMENTAL_ANALYSIS_PROMPT_TEMPLATE = ""
