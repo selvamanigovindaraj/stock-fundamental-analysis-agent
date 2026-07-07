@@ -44,3 +44,18 @@ def test_list_fields_coerce_a_numbered_multiline_string(field: str) -> None:
 def test_list_fields_wrap_a_single_sentence_string(field: str) -> None:
     report = _report(**{field: "Just one plain sentence with no separators."})
     assert getattr(report, field) == ["Just one plain sentence with no separators."]
+
+
+@pytest.mark.parametrize("field", ["risk_factors", "key_themes"])
+def test_list_fields_do_not_corrupt_text_starting_with_a_form_number(field: str) -> None:
+    """The bullet/number-stripping regex must not treat "10-K"/"10-Q" (or a date like
+    "2026-07-07") at the start of a line as a list marker -- caught in PR review: the
+    original `^[-*\\d]+[.)]?\\s*` pattern stripped "10-" off "10-K reports show high risk",
+    corrupting it to "K reports show high risk"."""
+    report = _report(
+        **{field: "10-K reports show high risk.\n2026-07-07 filing flagged a new item."}
+    )
+    assert getattr(report, field) == [
+        "10-K reports show high risk.",
+        "2026-07-07 filing flagged a new item.",
+    ]

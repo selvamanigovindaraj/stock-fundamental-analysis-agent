@@ -14,9 +14,12 @@ def _get_client() -> AsyncTavilyClient:
     return _client
 
 
-async def web_search_tool(query: str, *, days: int = 30, max_results: int = 10) -> list[dict[str, str]]:
+async def web_search_tool(
+    query: str, *, days: int = 30, max_results: int = 10
+) -> list[dict[str, str]]:
     """Tavily-backed news search tool for agent use."""
     response = await _get_client().search(query, topic="news", days=days, max_results=max_results)
     return [
-        {"title": r["title"], "url": r["url"], "content": r["content"]} for r in response["results"]
+        {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
+        for r in response.get("results", [])
     ]

@@ -192,7 +192,11 @@ def _coerce_str_list(value: object) -> object:
             return parsed
     lines = [line.strip() for line in stripped.splitlines() if line.strip()]
     if len(lines) > 1:
-        return [re.sub(r"^[-*\d]+[.)]?\s*", "", line) for line in lines]
+        # Only strip an actual bullet ("-"/"*") or a number followed by "." or ")" -- the
+        # original `^[-*\d]+[.)]?\s*` pattern also matched leading digits with no delimiter
+        # at all, corrupting text like "10-K reports..." into "K reports..." (caught in PR
+        # review).
+        return [re.sub(r"^(?:[-*]\s*|\d+[.)]\s*)", "", line) for line in lines]
     return [stripped]
 
 

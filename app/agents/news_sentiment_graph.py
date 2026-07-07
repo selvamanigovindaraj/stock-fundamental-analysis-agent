@@ -76,6 +76,10 @@ async def _score(state: NewsSentimentState) -> NewsSentimentState:
         return {**state, "result": _neutral_result(ticker)}
     try:
         result = await _get_sentiment_llm().ainvoke(_scoring_prompt(ticker, articles))
+        if result is None:
+            # with_structured_output can return None (rather than raising) if the model's
+            # output fails to parse -- treat the same as any other scoring failure.
+            result = _neutral_result(ticker)
     except Exception:
         logger.exception("news sentiment scoring failed for %s", ticker)
         result = _neutral_result(ticker)

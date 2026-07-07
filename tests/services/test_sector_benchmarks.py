@@ -29,6 +29,18 @@ async def test_fetch_market_ratios_returns_pe_pb_roe(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_fetch_market_ratios_tolerates_none_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    """yfinance can return `info=None` (or an empty dict) for invalid/delisted tickers or
+    during a temporary API failure -- calling `.get(...)` on that would otherwise raise
+    AttributeError."""
+    monkeypatch.setattr(sector_benchmarks.yf, "Ticker", lambda ticker: _fake_ticker(None))
+
+    pe, pb, roe = await sector_benchmarks.fetch_market_ratios("DELISTED")
+
+    assert (pe, pb, roe) == (None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_fetch_sector_benchmark_computes_median_across_peers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

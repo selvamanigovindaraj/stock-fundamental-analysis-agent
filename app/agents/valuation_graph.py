@@ -16,10 +16,23 @@ class ValuationState(TypedDict):
     result: ValuationResult | None
 
 
+async def _safe_fetch_market_ratios(
+    ticker: str,
+) -> tuple[float | None, float | None, float | None]:
+    # fetch_market_ratios already retries internally (tenacity); if it still raises after
+    # exhausting retries (rate limit, invalid ticker, network failure), degrade to
+    # (None, None, None) rather than crashing the whole valuation step -- compare_to_sector
+    # is already designed to handle missing values gracefully.
+    try:
+        return await fetch_market_ratios(ticker)
+    except Exception:
+        return None, None, None
+
+
 async def _compare(state: ValuationState) -> ValuationState:
     ticker = state["ticker"]
     (pe, pb, roe), benchmark = await asyncio.gather(
-        fetch_market_ratios(ticker), fetch_sector_benchmark(ticker)
+        _safe_fetch_market_ratios(ticker), fetch_sector_benchmark(ticker)
     )
     return {**state, "result": compare_to_sector(ticker, pe, pb, roe, benchmark)}
 

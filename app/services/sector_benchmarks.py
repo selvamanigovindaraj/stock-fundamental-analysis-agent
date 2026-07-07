@@ -29,6 +29,10 @@ _SECTOR_PEERS: dict[str, list[str]] = {
 async def fetch_market_ratios(ticker: str) -> tuple[float | None, float | None, float | None]:
     """Live trailing P/E, P/B, and ROE for a single ticker via yfinance."""
     info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
+    if not info:
+        # Invalid/delisted tickers or a transient yfinance API failure can come back as
+        # None or an empty dict rather than raising.
+        return None, None, None
     return info.get("trailingPE"), info.get("priceToBook"), info.get("returnOnEquity")
 
 

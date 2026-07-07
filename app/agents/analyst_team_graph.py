@@ -109,12 +109,27 @@ def init_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> None:
     _compiled_graph = build_analyst_team_graph(checkpointer)
 
 
-async def run_team_analysis(ticker: str) -> AnalystTeamState:
-    """Analyst team entry point: ticker in, final AnalystTeamState (with `report`) out."""
+async def run_team_analysis(
+    ticker: str, *, thread_id: str | None = None, config: RunnableConfig | None = None
+) -> AnalystTeamState:
+    """Analyst team entry point: ticker in, final AnalystTeamState (with `report`) out.
+
+    `thread_id`/`config` let a caller override the default `f"{ticker}:team"` checkpoint
+    thread and pass its own config through (e.g. tracing metadata) -- a static default
+    would otherwise make concurrent/repeated runs for the same ticker share/overwrite the
+    same checkpoint thread in the shared checkpointer, matching `run_supervisor_analysis`'s
+    own config-passthrough design."""
     assert _compiled_graph is not None, (
         "init_analyst_team_graph() must be called before run_team_analysis()"
     )
-    config: RunnableConfig = {"configurable": {"thread_id": f"{ticker}:team"}}
+    merged_config: RunnableConfig = {
+        **(config or {}),
+        "configurable": {
+            **(config or {}).get("configurable", {}),
+            "thread_id": thread_id or f"{ticker}:team",
+        },
+    }
+    config = merged_config
     initial_state: AnalystTeamState = {
         "ticker": ticker,
         "financials": None,

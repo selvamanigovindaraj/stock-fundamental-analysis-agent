@@ -6,7 +6,9 @@ from app.agents.tools import web_search
 
 
 class _FakeTavilyClient:
-    def __init__(self, results: list[dict[str, str]] | None = None, *, raises: Exception | None = None) -> None:
+    def __init__(
+        self, results: list[dict[str, str]] | None = None, *, raises: Exception | None = None
+    ) -> None:
         self._results = results if results is not None else []
         self._raises = raises
         self.last_call: dict[str, object] = {}
@@ -27,7 +29,11 @@ def _reset_client(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_web_search_tool_maps_tavily_results(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client = _FakeTavilyClient(
         results=[
-            {"title": "AAPL surges", "url": "https://example.com/1", "content": "Apple stock rises."},
+            {
+                "title": "AAPL surges",
+                "url": "https://example.com/1",
+                "content": "Apple stock rises.",
+            },
             {"title": "AAPL dips", "url": "https://example.com/2", "content": "Apple stock falls."},
         ]
     )
@@ -46,9 +52,43 @@ async def test_web_search_tool_maps_tavily_results(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_web_search_tool_returns_empty_list_on_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_web_search_tool_returns_empty_list_on_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(web_search, "_client", _FakeTavilyClient(results=[]))
 
     results = await web_search.web_search_tool("obscure ticker news")
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_tolerates_a_response_missing_the_results_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed/empty Tavily response (no "results" key at all) must degrade to an
+    empty list rather than raising KeyError (caught in PR review)."""
+
+    class _MalformedClient:
+        async def search(self, query: str, **kwargs: object) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(web_search, "_client", _MalformedClient())
+
+    results = await web_search.web_search_tool("AAPL stock news")
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_tolerates_a_result_missing_expected_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An individual result missing "title"/"url"/"content" must degrade to empty strings
+    for those fields rather than raising KeyError (caught in PR review)."""
+    fake_client = _FakeTavilyClient(results=[{"title": "AAPL surges"}])
+    monkeypatch.setattr(web_search, "_client", fake_client)
+
+    results = await web_search.web_search_tool("AAPL stock news")
+
+    assert results == [{"title": "AAPL surges", "url": "", "content": ""}]

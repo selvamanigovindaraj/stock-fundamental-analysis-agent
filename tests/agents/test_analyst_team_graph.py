@@ -78,6 +78,59 @@ def _init_with_in_memory_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(analyst_team_graph, "_compiled_graph", None)
 
 
+class _FakeCompiledTeamGraph:
+    def __init__(self) -> None:
+        self.captured_config: dict[str, object] | None = None
+
+    async def ainvoke(self, state: object, config: dict[str, object]) -> dict[str, object]:
+        self.captured_config = config
+        return {
+            "ticker": "AAPL",
+            "financials": None,
+            "ratios": None,
+            "sentiment": None,
+            "valuation": None,
+            "report": _report(),
+            "messages": [],
+            "errors": [],
+        }
+
+
+@pytest.mark.asyncio
+async def test_run_team_analysis_defaults_thread_id_to_ticker_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_graph = _FakeCompiledTeamGraph()
+    monkeypatch.setattr(analyst_team_graph, "_compiled_graph", fake_graph)
+
+    await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert fake_graph.captured_config is not None
+    assert fake_graph.captured_config["configurable"]["thread_id"] == "AAPL:team"
+
+
+@pytest.mark.asyncio
+async def test_run_team_analysis_accepts_thread_id_and_config_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A static thread_id (f"{ticker}:team") would make concurrent/repeated runs for the
+    same ticker share/overwrite the same checkpoint thread in the shared checkpointer --
+    callers must be able to override it, and pass their own config through (e.g. for
+    tracing metadata), matching run_supervisor_analysis's own design (caught in PR review)."""
+    fake_graph = _FakeCompiledTeamGraph()
+    monkeypatch.setattr(analyst_team_graph, "_compiled_graph", fake_graph)
+
+    caller_config = {"callbacks": ["fake-callback"], "configurable": {"other_key": "x"}}
+    await analyst_team_graph.run_team_analysis(
+        "AAPL", thread_id="custom-thread", config=caller_config
+    )
+
+    assert fake_graph.captured_config is not None
+    assert fake_graph.captured_config["callbacks"] == ["fake-callback"]
+    assert fake_graph.captured_config["configurable"]["other_key"] == "x"
+    assert fake_graph.captured_config["configurable"]["thread_id"] == "custom-thread"
+
+
 @pytest.mark.asyncio
 async def test_fan_out_dispatches_both_branches_concurrently(
     monkeypatch: pytest.MonkeyPatch,
