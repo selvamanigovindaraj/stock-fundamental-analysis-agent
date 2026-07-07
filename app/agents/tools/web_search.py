@@ -19,6 +19,8 @@ async def web_search_tool(
 ) -> list[dict[str, str]]:
     """Tavily-backed news search tool for agent use."""
     response = await _get_client().search(query, topic="news", days=days, max_results=max_results)
+    if not response or not isinstance(response, dict):
+        return []
     return [
         {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
         for r in response.get("results", [])

@@ -10,8 +10,15 @@ _OVERVALUED_THRESHOLD = 1.2
 _UNDERVALUED_THRESHOLD = 0.8
 
 
-def _ratio(value: float | None, median: float | None) -> float | None:
+def _ratio(
+    value: float | None, median: float | None, *, allow_negative: bool = True
+) -> float | None:
     if value is None or median is None or median == 0:
+        return None
+    if not allow_negative and (value < 0 or median < 0):
+        # A negative P/E or P/B (e.g. a company with negative trailing earnings) isn't a
+        # meaningful valuation multiple to compare against a sector median -- the resulting
+        # ratio would misrepresent unprofitability as a valuation signal.
         return None
     return value / median
 
@@ -58,8 +65,10 @@ def compare_to_sector(
     """Deterministic comparison of a ticker's P/E, P/B, and ROE against its sector-peer
     median benchmark -- no LLM call, this is a numeric comparison, not a language task."""
     vs_sector: dict[str, float | None] = {
-        "pe": _ratio(pe, benchmark.median_pe),
-        "pb": _ratio(pb, benchmark.median_pb),
+        # ROE (a profitability signal, not a valuation multiple) keeps allow_negative=True --
+        # a negative ROE vs. a positive sector median is still meaningful information.
+        "pe": _ratio(pe, benchmark.median_pe, allow_negative=False),
+        "pb": _ratio(pb, benchmark.median_pb, allow_negative=False),
         "roe": _ratio(roe, benchmark.median_roe),
     }
     return ValuationResult(

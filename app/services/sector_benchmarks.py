@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import yfinance as yf
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -26,9 +27,15 @@ _SECTOR_PEERS: dict[str, list[str]] = {
 @retry(
     stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.1, min=0.1, max=1), reraise=True
 )
+async def _fetch_ticker_info(ticker: str) -> dict[str, Any] | None:
+    # yfinance's `Ticker.info` is untyped (returns Any at runtime) -- Any here, not
+    # dict[str, object], so the float/str fields callers extract don't need re-narrowing.
+    return await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
+
+
 async def fetch_market_ratios(ticker: str) -> tuple[float | None, float | None, float | None]:
     """Live trailing P/E, P/B, and ROE for a single ticker via yfinance."""
-    info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
+    info = await _fetch_ticker_info(ticker)
     if not info:
         # Invalid/delisted tickers or a transient yfinance API failure can come back as
         # None or an empty dict rather than raising.
@@ -46,33 +53,30 @@ def _median(values: list[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2
 
 
+def _degraded(sector: str, error: str) -> SectorBenchmark:
+    return SectorBenchmark(
+        sector=sector,
+        median_pe=None,
+        median_pb=None,
+        median_roe=None,
+        peers_used=[],
+        errors=[error],
+    )
+
+
 async def fetch_sector_benchmark(ticker: str) -> SectorBenchmark:
     """Live sector-peer median P/E, P/B, and ROE for ticker's sector. Never raises --
     degrades to all-None medians (with the reason recorded in `errors`) if the sector is
     unknown or every peer fetch fails."""
     try:
-        info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
-        sector = info.get("sector") or "unknown"
+        info = await _fetch_ticker_info(ticker)
+        sector = (info or {}).get("sector") or "unknown"
     except Exception as exc:
-        return SectorBenchmark(
-            sector="unknown",
-            median_pe=None,
-            median_pb=None,
-            median_roe=None,
-            peers_used=[],
-            errors=[f"failed to resolve sector for {ticker}: {exc}"],
-        )
+        return _degraded("unknown", f"failed to resolve sector for {ticker}: {exc}")
 
     peers = _SECTOR_PEERS.get(sector)
     if not peers:
-        return SectorBenchmark(
-            sector=sector,
-            median_pe=None,
-            median_pb=None,
-            median_roe=None,
-            peers_used=[],
-            errors=[f"no peer basket configured for sector {sector!r}"],
-        )
+        return _degraded(sector, f"no peer basket configured for sector {sector!r}")
 
     results = await asyncio.gather(
         *(fetch_market_ratios(peer) for peer in peers), return_exceptions=True

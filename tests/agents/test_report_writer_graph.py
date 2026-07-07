@@ -67,3 +67,27 @@ async def test_run_report_writer_always_overrides_disclaimer(
     assert result.executive_summary == "Strong quarter."
     assert fake_llm.invoke_count == 1
     assert "strong earnings" in fake_llm.last_prompt
+
+
+@pytest.mark.asyncio
+async def test_run_report_writer_raises_a_clear_error_when_llm_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """with_structured_output can return None if the LLM's output fails to parse -- must
+    raise a clear error instead of an AttributeError from calling .model_copy() on None
+    (caught in PR review)."""
+
+    class _NoneReturningLLM:
+        async def ainvoke(self, prompt: str) -> None:
+            return None
+
+    monkeypatch.setattr(report_writer_graph, "_report_llm", _NoneReturningLLM())
+
+    with pytest.raises(ValueError, match="AAPL"):
+        await report_writer_graph.run_report_writer(
+            ticker="AAPL",
+            financials=None,
+            ratios=None,
+            sentiment=_sentiment(),
+            valuation=_valuation(),
+        )

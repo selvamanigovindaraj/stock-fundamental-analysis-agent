@@ -41,6 +41,43 @@ async def test_fetch_market_ratios_tolerates_none_info(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_fetch_sector_benchmark_retries_sector_resolution_before_succeeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sector resolution now shares the same retried `_fetch_ticker_info` helper as peer
+    fetches (caught in PR review: it previously called `yf.Ticker(...).info` directly with
+    no retry at all, unlike the peer fetches)."""
+    attempts = {"count": 0}
+
+    def fake_ticker_for(ticker: str) -> object:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("transient yfinance failure")
+        return _fake_ticker({"sector": "Technology"})
+
+    monkeypatch.setattr(sector_benchmarks.yf, "Ticker", fake_ticker_for)
+    monkeypatch.setattr(sector_benchmarks, "_SECTOR_PEERS", {"Technology": []})
+
+    benchmark = await sector_benchmarks.fetch_sector_benchmark("AAPL")
+
+    assert benchmark.sector == "Technology"
+    assert attempts["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_sector_benchmark_tolerates_none_info_during_sector_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sector_benchmarks.yf, "Ticker", lambda ticker: _fake_ticker(None))
+
+    benchmark = await sector_benchmarks.fetch_sector_benchmark("DELISTED")
+
+    assert benchmark.sector == "unknown"
+    assert benchmark.median_pe is None
+    assert benchmark.errors
+
+
+@pytest.mark.asyncio
 async def test_fetch_sector_benchmark_computes_median_across_peers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

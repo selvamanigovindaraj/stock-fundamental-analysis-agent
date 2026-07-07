@@ -92,3 +92,20 @@ async def test_web_search_tool_tolerates_a_result_missing_expected_keys(
     results = await web_search.web_search_tool("AAPL stock news")
 
     assert results == [{"title": "AAPL surges", "url": "", "content": ""}]
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_tolerates_a_none_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the Tavily client returns None or a non-dict (unexpected client behavior), must
+    degrade to an empty list rather than raising AttributeError on `.get()` (caught in PR
+    review)."""
+
+    class _NoneReturningClient:
+        async def search(self, query: str, **kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(web_search, "_client", _NoneReturningClient())
+
+    results = await web_search.web_search_tool("AAPL stock news")
+
+    assert results == []

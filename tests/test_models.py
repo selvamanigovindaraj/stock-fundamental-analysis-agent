@@ -59,3 +59,12 @@ def test_list_fields_do_not_corrupt_text_starting_with_a_form_number(field: str)
         "10-K reports show high risk.",
         "2026-07-07 filing flagged a new item.",
     ]
+
+
+@pytest.mark.parametrize("field", ["risk_factors", "key_themes"])
+def test_list_fields_coerce_none_to_an_empty_list(field: str) -> None:
+    """DeepSeek's structured output can return `null` for these fields entirely (not just a
+    malformed string) -- must coerce to an empty list rather than passing None through to
+    Pydantic's `list[str]` validation, which would raise (caught in PR review)."""
+    report = _report(**{field: None})
+    assert getattr(report, field) == []

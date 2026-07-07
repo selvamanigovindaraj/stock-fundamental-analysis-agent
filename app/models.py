@@ -180,6 +180,8 @@ def _coerce_str_list(value: object) -> object:
     # numbered/bulleted multiline string instead of a real list for these fields (found via
     # live verify-agent: 5/10 real ticker reports hit this and crashed after ~20s of prior
     # agent work) -- tolerate the common shapes rather than hard-failing the whole report.
+    if value is None:
+        return []
     if not isinstance(value, str):
         return value
     stripped = value.strip()

@@ -69,6 +69,15 @@ def _report_prompt(state: ReportWriterState) -> str:
 
 async def _write(state: ReportWriterState) -> ReportWriterState:
     report = await _get_report_llm().ainvoke(_report_prompt(state))
+    if report is None:
+        # with_structured_output can return None if the LLM's output fails to parse. This
+        # is the terminal step of the pipeline -- unlike news_sentiment's neutral fallback,
+        # there's no meaningful default report to substitute, so raise clearly instead of
+        # a cryptic AttributeError from .model_copy() below.
+        raise ValueError(
+            f"Failed to generate structured analyst report for {state['ticker']} "
+            "(LLM returned None or parsing failed)"
+        )
     # Deterministic compliance text -- never left to the LLM to paraphrase per-run.
     report = report.model_copy(update={"disclaimer": _DISCLAIMER})
     return {**state, "report": report}
