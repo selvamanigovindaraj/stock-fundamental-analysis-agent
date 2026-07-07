@@ -27,6 +27,92 @@ Frontend: http://localhost:5174
 - Backend imports use the `app.*` prefix; run uvicorn from the project root (`uvicorn app.main:app`).
 - Everything is currently a stub (`raise NotImplementedError` / `pass`) — see `.claude/rules/` for style and testing conventions.
 
+## Multi-Agent Supervisor (Data Ingestion + Ratio Analysis)
+
+`app.agents.supervisor_graph.run_supervisor_analysis(ticker)` is a real, working
+implementation, wired to `GET /analysis/{ticker}/stream` (same SSE shape as
+`/fundamentals/{ticker}/stream`). A `Command(goto=...)`-driven supervisor node makes an
+LLM (`DEEPSEEK_MODEL_ROUTING`, must be `deepseek-chat` — see the DeepSeek structured-output
+note below) routing decision each turn between two compiled-subgraph workers
+(`data_ingestion`, `ratio_analysis`), with a hard invariant that overrides the LLM if it
+tries to re-invoke a worker whose output already exists, or invoke `ratio_analysis` before
+`financials` exists. State tracks which workers have run via an explicit `visited` list
+field — not by parsing `messages` text — so control flow never depends on log wording.
+
+**Requires a local Postgres** (new `postgres` service in `docker-compose.yml`, first
+Postgres dependency this project has had) for `AsyncPostgresSaver` checkpointing — a
+mid-run crash resumes from the last checkpoint instead of restarting `data_ingestion`.
+`POSTGRES_URL` in `.env` points at `localhost:5433` for anything run directly on the host
+(scripts, `pytest`, `uv run uvicorn` outside Docker); the `backend` container overrides it
+via `docker-compose.yml`'s `environment:` block to the in-network `postgres:5432` hostname,
+since containers can't reach each other via `localhost`. Verified live: interrupting a run
+right after `data_ingestion` (`interrupt_after=["data_ingestion"]`) and resuming the same
+`thread_id` correctly skips re-running `data_ingestion` and only invokes `ratio_analysis`.
+
+**Module layout (SRP)**: `app/agents/supervisor_graph.py` owns *only* the graph/routing
+logic — no Postgres, no lazy-init caching, no locks. It exposes
+`init_supervisor_graph(checkpointer)` (compile + register the graph; must be called
+exactly once) and `run_supervisor_analysis(...)` (asserts `init_supervisor_graph` was
+already called — a clear error if not, rather than a confusing failure deep in graph
+internals). Postgres connection lifecycle lives in `app/db.py`
+(`open_pool(url)`/`close_pool(pool)`, no caching, no locking — just the two functions).
+The actual startup/shutdown wiring is `app/core/lifespan.py`'s
+`@asynccontextmanager lifespan(app)`: opens the pool, builds `AsyncPostgresSaver`, runs
+`.setup()`, calls `init_supervisor_graph(checkpointer)` to inject it into the agent module
+(push, not pull), and closes the pool in a `finally` on shutdown (even if `.setup()`
+itself failed, so a broken startup never leaks the pool). `app/main.py` only wires
+`FastAPI(lifespan=lifespan)` + CORS + `include_router(...)` for `app/routers/streaming.py`
+(both SSE routes) and `app/routers/core.py` (the `/health`/`/chat` stubs) — no
+Postgres/agent-specific code left in it at all. This replaced an earlier design where
+`supervisor_graph.py` itself lazily built and cached the pool/checkpointer/graph behind an
+`asyncio.Lock`, called eagerly from an inline lifespan in `main.py` — functionally
+equivalent for fail-fast purposes, but mixed unrelated concerns into one module and one
+file; the push-based injection pattern above (adapted from a sibling reference project,
+`finance-ai-agent`) needs no lock at all, since there's no lazy path left to race on.
+Verified live after the restructure: real ticker requests still work end-to-end through
+the new module split, and with Postgres stopped, `docker compose up backend` still fails
+outright after ~30s (`psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec`
+→ `ERROR: Application startup failed. Exiting.`) rather than starting and silently failing
+requests later; recovers cleanly once Postgres is back.
+
+**Fixed properly, not by hand-listing types**: LangGraph's checkpoint serializer used to
+log `Deserializing unregistered type app.models.FinancialStatements from checkpoint. This
+will be blocked in a future version` when checkpointing our custom Pydantic models via
+msgpack — found via live verify-agent. This isn't just a cosmetic warning: it's the
+non-strict side of a real security posture (`langgraph`/`langgraph-checkpoint` security
+advisory GHSA-g48c-2wqr-h844 / CVE-2026-28277, unsafe msgpack deserialization; fixed
+upstream in `langgraph-checkpoint>=...` with the `LANGGRAPH_STRICT_MSGPACK` mechanism —
+we're on `langgraph==1.2.7`/`langgraph-checkpoint==4.1.1`, both well past the fix).
+
+An earlier attempt at this fix manually constructed `JsonPlusSerializer(
+allowed_msgpack_modules=[FinancialStatements, FundamentalRatios])` and passed it to
+`AsyncPostgresSaver` — this "worked" (silenced the warning) but was a sidestep: a
+hand-maintained list that would silently miss any new checkpointed Pydantic type (it
+already missed `IncomeStatement`/`BalanceSheet`/`CashFlowStatement`, nested inside
+`FinancialStatements`) and duplicated a mechanism the framework already provides.
+
+**Actual fix**: set `LANGGRAPH_STRICT_MSGPACK=true` as a real OS env var before any
+`langgraph` import in the process (`os.environ.setdefault(...)` at the very top of
+`app/main.py`, and in `tests/conftest.py` for the test suite — it can't go through
+`app/config.py`'s `Settings`/`.env`, since LangGraph reads it via `os.getenv` directly,
+not through our own settings object, and pydantic-settings' `extra_forbidden` default
+means adding it to `.env` without a matching `Settings` field crashes at startup). With
+strict mode on, `StateGraph.compile(checkpointer=...)` (in `build_supervisor_graph`)
+automatically walks the graph's own state schema (`SupervisorState`'s field types) and
+calls `checkpointer.with_allowlist(...)` — no manual serde construction needed at all,
+and it correctly picked up the nested statement types the manual list missed. Verified:
+`build_supervisor_graph(InMemorySaver()).checkpointer.serde._allowed_msgpack_modules`
+contains all five of our checkpointed model types automatically; live re-verified against
+the real Postgres-backed container with zero warnings in the logs.
+
+**Stale-container gotcha (verify-agent process note, not a code bug)**: this repo's
+`docker compose` `backend` container runs `uvicorn` without `--reload` — the `./app:/app/app`
+bind mount means file edits appear inside the container, but the running process doesn't
+pick them up until the container restarts. A `backend` container left running from a much
+earlier session silently served stale code (missing the new route entirely, 404s) while
+looking otherwise healthy. `docker compose up -d --build backend` after backend code
+changes, not just leaving an old container running, is required before verifying live.
+
 ## DataIngestionAgent / RatioEngine
 
 `app.agents.ingestion_graph.run_ingestion(ticker)` and `app.services.ratio_engine.RatioEngine`

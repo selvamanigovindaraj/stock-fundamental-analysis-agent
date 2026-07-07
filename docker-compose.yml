@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stock_analyser
+      POSTGRES_USER: stock_analyser
+      POSTGRES_PASSWORD: stock_analyser
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_analyser"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -7,8 +23,16 @@ services:
       - "8001:8000"
     env_file:
       - .env
+    # Overrides .env's POSTGRES_URL (which points at localhost:5433 for scripts/tests run
+    # directly on the host) with the in-network hostname, since containers can't reach each
+    # other via localhost.
+    environment:
+      POSTGRES_URL: postgresql://stock_analyser:stock_analyser@postgres:5432/stock_analyser
     volumes:
       - ./app:/app/app
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -18,3 +42,6 @@ services:
       - "5174:5173"
     depends_on:
       - backend
+
+volumes:
+  postgres_data:

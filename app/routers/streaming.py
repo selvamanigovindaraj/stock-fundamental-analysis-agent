@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+
+from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
+
+from app.agents.supervisor_graph import run_supervisor_analysis
+from app.models import FundamentalRatios
+from app.services.financial_sources import SourceUnavailableError
+from app.services.ratio_engine import RatioEngine
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+async def _sse_stream(
+    ticker: str, compute: Callable[[str], Awaitable[FundamentalRatios]]
+) -> AsyncIterator[str]:
+    yield f"event: started\ndata: {json.dumps({'ticker': ticker})}\n\n"
+    try:
+        ratios = await compute(ticker)
+        yield f"event: result\ndata: {ratios.model_dump_json()}\n\n"
+    except SourceUnavailableError as exc:
+        yield f"event: error\ndata: {json.dumps({'ticker': ticker, 'error': str(exc)})}\n\n"
+    except Exception:
+        # Once the SSE response has started, FastAPI's normal exception handlers can no
+        # longer convert a mid-stream failure into a clean HTTP error — without this, an
+        # unexpected bug here would just cut the connection with no error event at all.
+        logger.exception("unexpected error streaming analysis for %s", ticker)
+        yield f"event: error\ndata: {json.dumps({'ticker': ticker, 'error': 'internal error'})}\n\n"
+
+
+async def _fetch_ratios(ticker: str) -> FundamentalRatios:
+    return await RatioEngine.compute_all(ticker)
+
+
+async def _fetch_supervisor_ratios(ticker: str) -> FundamentalRatios:
+    result = await run_supervisor_analysis(ticker)
+    ratios = result["ratios"]
+    assert ratios is not None  # guaranteed by run_supervisor_analysis's own contract
+    return ratios
+
+
+@router.get("/fundamentals/{ticker}/stream")
+async def stream_fundamentals(ticker: str) -> StreamingResponse:
+    """Stream DataIngestionAgent + RatioEngine progress for a ticker via SSE."""
+    return StreamingResponse(_sse_stream(ticker, _fetch_ratios), media_type="text/event-stream")
+
+
+@router.get("/analysis/{ticker}/stream")
+async def stream_analysis(ticker: str) -> StreamingResponse:
+    """Stream multi-agent Supervisor (DataIngestionAgent -> RatioAnalysisAgent) progress for
+    a ticker via SSE."""
+    return StreamingResponse(
+        _sse_stream(ticker, _fetch_supervisor_ratios), media_type="text/event-stream"
+    )

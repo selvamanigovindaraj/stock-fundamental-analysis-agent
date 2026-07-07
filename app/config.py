@@ -14,12 +14,18 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_generation: str = "deepseek-chat"
+    # Must stay a non-thinking model (e.g. "deepseek-chat", not "deepseek-v4-flash") --
+    # with_structured_output(method="function_calling") 400s against DeepSeek's thinking-mode
+    # models. Used by the multi-agent Supervisor's routing decision.
     deepseek_model_routing: str = "deepseek-chat"
 
     # Weaviate Cloud
     weaviate_url: str = ""
     weaviate_api_key: str = ""
     weaviate_filings_collection: str = "FilingSection"
+
+    # Postgres (LangGraph checkpointing for the multi-agent Supervisor)
+    postgres_url: str = ""
 
     # Voyage AI (embeddings + reranking)
     voyage_api_key: str = ""
