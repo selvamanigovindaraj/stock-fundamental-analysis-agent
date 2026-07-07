@@ -113,6 +113,70 @@ earlier session silently served stale code (missing the new route entirely, 404s
 looking otherwise healthy. `docker compose up -d --build backend` after backend code
 changes, not just leaving an old container running, is required before verifying live.
 
+## 5-Agent Analyst Team (News/Sentiment + Valuation + Report-Writer)
+
+`app.agents.analyst_team_graph.run_team_analysis(ticker)` is a real, working
+implementation, wired to `GET /report/{ticker}/stream` (same SSE shape as the other two
+routes). Expands the 2-agent supervisor above into 5 agents: `Send`-based fan-out of
+Data-Ingestion+Ratio-Analysis (the existing supervisor, reused unchanged as a black-box
+branch) and News/Sentiment, converging into Valuation then Report-Writer. **True 3-way
+parallelism is impossible** — Ratio Analysis needs Data Ingestion's own output — so the
+fan-out is 2-way (financials branch, news branch); Ratio Analysis runs sequentially inside
+the financials branch, which is fine since it's pure/fast (no I/O). No LLM-driven routing
+at the outer level (unlike the reused supervisor's own internal routing) — this pipeline's
+shape is fully deterministic, so static `Send`/edges are used instead, confirmed with the
+user rather than assumed.
+
+**Checkpoint/trace nesting**: reusing the supervisor as a branch meant its
+`run_supervisor_analysis` needed a way to avoid colliding with the outer graph's own
+Postgres checkpoint thread (both defaulting to `thread_id=ticker` against the same shared
+checkpointer would let a resume return the wrong graph's state) — fixed by adding an
+optional `config: RunnableConfig | None` passthrough param: the outer graph calls
+`run_supervisor_analysis(ticker, thread_id=f"{ticker}:financials", config=config)`,
+overriding just the thread_id while preserving callbacks, so LangSmith nests the reused
+subgraph's run under the outer team run instead of it appearing as an unrelated top-level
+trace. Verified live via the LangSmith API (`Client.list_runs(trace_id=...)`): all ~30
+spans of a real run share one `trace_id`, and `financials_branch`/`news_branch` start
+within 166 microseconds of each other with genuinely overlapping time windows — real
+concurrency, not just claimed.
+
+**Sector benchmarks are always live-fetched, never hardcoded** (`app/services/
+sector_benchmarks.py`): a small curated peer-ticker table per sector (just *which* tickers
+to ask, e.g. Technology → MSFT/GOOGL/META/NVDA/ORCL) feeds live concurrent
+`yfinance.Ticker(peer).info` calls (`trailingPE`/`priceToBook`/`returnOnEquity`), median
+computed at request time. Peer fetches are `tenacity`-retried and run via `asyncio.gather`
+so a 5-peer basket costs ~one network round-trip, not five sequential ones. `Valuation`'s
+P/E, P/B, *and* ROE all come from this same live yfinance call — deliberately independent
+of whether the financials branch (which has its own, unrelated `ratios.roe`) succeeded, so
+Valuation still produces a real answer even when Data Ingestion fails entirely.
+
+**Two real bugs found only by live verify-agent** (both invisible to unit tests, which
+mock the LLM):
+
+1. `news_sentiment_graph.py` and `report_writer_graph.py` both initially used
+   `deepseek_model_generation` for their `with_structured_output` calls — but that setting
+   is configured as a thinking model (`deepseek-v4-flash`) in the real `.env`, and
+   DeepSeek's structured-output mode 400s on thinking models ("Thinking mode does not
+   support this tool_choice" — the same constraint already documented below for the
+   Filings RAG pipeline, re-discovered here). Fixed by switching both to
+   `deepseek_model_routing` (already the project's designated non-thinking-model setting,
+   previously only used by the supervisor's routing decision).
+2. `AnalystReport.risk_factors`/`key_themes` (`list[str]`) crashed with a Pydantic
+   `ValidationError` in 5 of 10 real ticker runs — DeepSeek's structured output sometimes
+   returns a JSON-stringified array or a numbered/bulleted multiline string instead of a
+   real list for these two fields. Fixed with a `field_validator(mode="before")` on both
+   fields (`app/models.py`) that tolerates the common shapes (JSON-stringified list,
+   numbered/bulleted multiline string, or a single plain sentence) rather than hard-failing
+   the whole report after ~20s of prior agent work. `NewsSentimentResult` has a similar,
+   rarer failure mode (the LLM occasionally omits every field but `ticker`) that's already
+   handled by `news_sentiment_graph.py`'s existing degrade-to-neutral path, not a new bug.
+3. The verification script's own "sequential baseline" measurement was comparing unequal
+   work (only timing 2 of the 5 agents against the full 5-agent parallel run), making its
+   speedup number meaningless — fixed to run the same 5-agent total workload sequentially.
+   Real, corrected result: **10/10 tickers passed, 19.0s average (well under the 120s
+   budget), 1.11x speedup** — modest but genuine, bounded by how much slower the
+   news branch (Tavily search + LLM scoring) is than the financials branch it overlaps with.
+
 ## DataIngestionAgent / RatioEngine
 
 `app.agents.ingestion_graph.run_ingestion(ticker)` and `app.services.ratio_engine.RatioEngine`

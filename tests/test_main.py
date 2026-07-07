@@ -16,6 +16,7 @@ def test_app_starts_and_routes_are_registered(fake_lifespan_postgres: None) -> N
     assert "/chat" in paths
     assert "/fundamentals/{ticker}/stream" in paths
     assert "/analysis/{ticker}/stream" in paths
+    assert "/report/{ticker}/stream" in paths
 
 
 def test_app_startup_fails_fast_if_checkpointer_setup_fails(

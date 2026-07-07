@@ -6,9 +6,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from app.agents.analyst_team_graph import run_team_analysis
 from app.agents.supervisor_graph import run_supervisor_analysis
-from app.models import FundamentalRatios
+from app.models import AnalystReport, FundamentalRatios
 from app.services.financial_sources import SourceUnavailableError
 from app.services.ratio_engine import RatioEngine
 
@@ -18,7 +20,7 @@ router = APIRouter()
 
 
 async def _sse_stream(
-    ticker: str, compute: Callable[[str], Awaitable[FundamentalRatios]]
+    ticker: str, compute: Callable[[str], Awaitable[BaseModel]]
 ) -> AsyncIterator[str]:
     yield f"event: started\ndata: {json.dumps({'ticker': ticker})}\n\n"
     try:
@@ -45,6 +47,13 @@ async def _fetch_supervisor_ratios(ticker: str) -> FundamentalRatios:
     return ratios
 
 
+async def _fetch_report(ticker: str) -> AnalystReport:
+    result = await run_team_analysis(ticker)
+    report = result["report"]
+    assert report is not None  # report_writer always runs, degraded inputs or not
+    return report
+
+
 @router.get("/fundamentals/{ticker}/stream")
 async def stream_fundamentals(ticker: str) -> StreamingResponse:
     """Stream DataIngestionAgent + RatioEngine progress for a ticker via SSE."""
@@ -58,3 +67,10 @@ async def stream_analysis(ticker: str) -> StreamingResponse:
     return StreamingResponse(
         _sse_stream(ticker, _fetch_supervisor_ratios), media_type="text/event-stream"
     )
+
+
+@router.get("/report/{ticker}/stream")
+async def stream_report(ticker: str) -> StreamingResponse:
+    """Stream the full 5-agent analyst team (Data Ingestion + Ratio Analysis + News/Sentiment
+    fan-out -> Valuation -> Report-Writer) progress for a ticker via SSE."""
+    return StreamingResponse(_sse_stream(ticker, _fetch_report), media_type="text/event-stream")
