@@ -8,6 +8,7 @@ import yfinance as yf
 
 from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import sanitize_ticker
 
 # Cost Of Revenue / Gross Profit / Operating Income are NOT required: banks (e.g. JPM) report
 # a net-interest-income model with no such concepts at all, rather than a real zero. Same for
@@ -45,6 +46,7 @@ def _value(series: pd.Series, row: str, *, default: float = 0.0) -> float:
 
 async def fetch_financials(ticker: str) -> FinancialStatements:
     """Fetch and normalize income statement, balance sheet, and cash flow via yfinance."""
+    ticker = sanitize_ticker(ticker)
     try:
         ticker_obj = yf.Ticker(ticker)
         income_frame, balance_frame, cashflow_frame = await asyncio.to_thread(

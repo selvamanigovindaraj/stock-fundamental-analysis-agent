@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.models import AnalystReport, ArticleSentiment, CriticReview, NewsSentimentResult
+from app.models import (
+    AnalystReport,
+    ArticleSentiment,
+    CriticReview,
+    INVESTMENT_DISCLAIMER,
+    NewsSentimentResult,
+)
 
 
 def _report(**overrides: object) -> AnalystReport:
@@ -89,6 +95,11 @@ def test_sentiment_scores_are_bounded() -> None:
             key_themes=[],
             articles=[],
         )
+
+
+def test_report_disclaimer_is_forced_by_model_validation() -> None:
+    assert _report(disclaimer="").disclaimer == INVESTMENT_DISCLAIMER
+    assert _report(disclaimer="custom advice text").disclaimer == INVESTMENT_DISCLAIMER
 
 
 def test_critic_review_score_is_bounded_and_verdict_is_structured() -> None:

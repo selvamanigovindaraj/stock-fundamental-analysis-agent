@@ -8,6 +8,7 @@ from pydantic import SecretStr
 
 from app.config import get_settings
 from app.models import AnalystReport, CRITIC_QUALITY_THRESHOLD, CriticReview, FundamentalRatios
+from app.services.guardrails import sanitize_ticker
 
 
 _critic_llm: Runnable[str, CriticReview] | None = None
@@ -66,6 +67,7 @@ async def run_report_critic(
     ratios: FundamentalRatios | None,
     source_urls: list[str],
 ) -> CriticReview:
+    ticker = sanitize_ticker(ticker)
     review = await _get_critic_llm().ainvoke(
         _critic_prompt(ticker=ticker, report=report, ratios=ratios, source_urls=source_urls)
     )

@@ -10,6 +10,7 @@ import httpx
 from app.config import get_settings
 from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import sanitize_ticker
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -117,6 +118,7 @@ def _period_end(usgaap: dict[str, Any], tag_name: str) -> str:
 async def fetch_financials(ticker: str) -> FinancialStatements:
     """Fetch and normalize income statement, balance sheet, and cash flow via the direct
     SEC EDGAR companyfacts API."""
+    ticker = sanitize_ticker(ticker)
     client = _get_client()
     try:
         cik = await _lookup_cik(client, ticker)

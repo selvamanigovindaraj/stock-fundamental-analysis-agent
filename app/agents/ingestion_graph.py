@@ -9,6 +9,7 @@ from app.models import FinancialStatements
 from app.observability.tracer import Tracer
 from app.services.financial_sources import SourceUnavailableError
 from app.services.financial_sources import edgartools_source, sec_edgar_source, yfinance_source
+from app.services.guardrails import sanitize_ticker
 
 _tracer = Tracer()
 
@@ -77,6 +78,7 @@ _compiled_graph = build_ingestion_graph()
 
 async def run_ingestion(ticker: str) -> FinancialStatements:
     """DataIngestionAgent entry point: ticker in, financials out."""
+    ticker = sanitize_ticker(ticker)
     result = await _compiled_graph.ainvoke({"ticker": ticker, "financials": None})
     financials = result["financials"]
     if financials is None:

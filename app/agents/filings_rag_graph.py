@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from app.config import get_settings
 from app.models import Document, FilingsRAGAnswer
+from app.services.guardrails import sanitize_ticker
 from app.services.filings.retriever import FilingsRAGRetriever
 
 _NO_RESULTS_ANSWER = "I couldn't find relevant information in the filings to answer this question."
@@ -114,6 +115,7 @@ _compiled_graph = build_filings_rag_graph()
 
 async def answer_filing_question(question: str, ticker: str) -> FilingsRAGAnswer:
     """Answer a natural-language question about `ticker`'s filings, with citations."""
+    ticker = sanitize_ticker(ticker)
     result = await _compiled_graph.ainvoke(
         {"question": question, "ticker": ticker, "documents": [], "answer": ""}
     )

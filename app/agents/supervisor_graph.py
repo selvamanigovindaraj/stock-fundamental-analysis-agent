@@ -16,6 +16,7 @@ from app.agents.ratio_analysis_graph import run_ratio_analysis
 from app.config import get_settings
 from app.models import FinancialStatements, FundamentalRatios
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import sanitize_ticker
 
 _WorkerName = Literal["data_ingestion", "ratio_analysis", "FINISH"]
 
@@ -195,6 +196,7 @@ async def run_supervisor_analysis(
     assert _compiled_graph is not None, (
         "init_supervisor_graph() must be called before run_supervisor_analysis()"
     )
+    ticker = sanitize_ticker(ticker)
     merged_config: RunnableConfig = {
         **(config or {}),
         "configurable": {

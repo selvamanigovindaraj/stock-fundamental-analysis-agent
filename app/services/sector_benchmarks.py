@@ -8,6 +8,7 @@ import yfinance as yf
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.models import SectorBenchmark
+from app.services.guardrails import sanitize_ticker
 
 # Curated ~5-peer basket per sector, used only to know *which* tickers to fetch live data
 # for -- the benchmark numbers themselves always come from a live yfinance call, never a
@@ -31,11 +32,13 @@ _SECTOR_PEERS: dict[str, list[str]] = {
 async def _fetch_ticker_info(ticker: str) -> dict[str, Any] | None:
     # yfinance's `Ticker.info` is untyped (returns Any at runtime) -- Any here, not
     # dict[str, object], so the float/str fields callers extract don't need re-narrowing.
+    ticker = sanitize_ticker(ticker)
     return await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
 
 
 async def fetch_market_ratios(ticker: str) -> tuple[float | None, float | None, float | None]:
     """Live trailing P/E, P/B, and ROE for a single ticker via yfinance."""
+    ticker = sanitize_ticker(ticker)
     info = await _fetch_ticker_info(ticker)
     if not info:
         # Invalid/delisted tickers or a transient yfinance API failure can come back as
@@ -63,6 +66,7 @@ async def fetch_sector_benchmark(ticker: str) -> SectorBenchmark:
     """Live sector-peer median P/E, P/B, and ROE for ticker's sector. Never raises --
     degrades to all-None medians (with the reason recorded in `errors`) if the sector is
     unknown or every peer fetch fails."""
+    ticker = sanitize_ticker(ticker)
     try:
         info = await _fetch_ticker_info(ticker)
         sector = (info or {}).get("sector") or "unknown"

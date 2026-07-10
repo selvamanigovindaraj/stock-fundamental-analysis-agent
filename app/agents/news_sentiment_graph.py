@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from app.agents.tools.web_search import web_search_tool
 from app.config import get_settings
 from app.models import NewsSentimentResult
+from app.services.guardrails import sanitize_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ _compiled_graph = build_news_sentiment_graph()
 
 async def run_news_sentiment(ticker: str) -> NewsSentimentResult:
     """News/Sentiment Agent entry point: ticker in, aggregated sentiment out. Never raises."""
+    ticker = sanitize_ticker(ticker)
     result = await _compiled_graph.ainvoke({"ticker": ticker, "articles": [], "result": None})
     sentiment = result["result"]
     assert sentiment is not None

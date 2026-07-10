@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.models import ValuationResult
+from app.services.guardrails import sanitize_ticker
 from app.services.sector_benchmarks import fetch_market_ratios, fetch_sector_benchmark
 from app.services.valuation import compare_to_sector
 
@@ -52,6 +53,7 @@ _compiled_graph = build_valuation_graph()
 
 async def run_valuation(ticker: str) -> ValuationResult:
     """Valuation Agent entry point: ticker in, sector-relative valuation verdict out."""
+    ticker = sanitize_ticker(ticker)
     result = await _compiled_graph.ainvoke({"ticker": ticker, "result": None})
     valuation = result["result"]
     assert valuation is not None

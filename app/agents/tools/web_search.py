@@ -3,6 +3,7 @@ from __future__ import annotations
 from tavily import AsyncTavilyClient
 
 from app.config import get_settings
+from app.services.guardrails import validate_api_bounds
 
 _client: AsyncTavilyClient | None = None
 
@@ -18,6 +19,7 @@ async def web_search_tool(
     query: str, *, days: int = 30, max_results: int = 10
 ) -> list[dict[str, str]]:
     """Tavily-backed news search tool for agent use."""
+    validate_api_bounds(days=days, max_results=max_results)
     response = await _get_client().search(query, topic="news", days=days, max_results=max_results)
     if not response or not isinstance(response, dict):
         return []
