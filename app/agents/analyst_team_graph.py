@@ -11,17 +11,22 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
 from app.agents.news_sentiment_graph import run_news_sentiment
+from app.agents.report_critic_graph import run_report_critic
 from app.agents.report_writer_graph import run_report_writer
 from app.agents.supervisor_graph import run_supervisor_analysis
 from app.agents.valuation_graph import run_valuation
 from app.models import (
     AnalystReport,
+    CRITIC_QUALITY_THRESHOLD,
+    CriticReview,
     FinancialStatements,
     FundamentalRatios,
     NewsSentimentResult,
     ValuationResult,
 )
 from app.services.financial_sources import SourceUnavailableError
+
+_MAX_REVISIONS = 3
 
 
 class AnalystTeamState(TypedDict):
@@ -31,6 +36,13 @@ class AnalystTeamState(TypedDict):
     sentiment: NewsSentimentResult | None
     valuation: ValuationResult | None
     report: AnalystReport | None
+    first_report: AnalystReport | None
+    critic_review: CriticReview | None
+    first_critic_review: CriticReview | None
+    revision_instructions: str | None
+    revision_count: int
+    quality_flag: str | None
+    hitl_status: str | None
     messages: Annotated[list[str], operator.add]
     errors: Annotated[list[str], operator.add]
 
@@ -72,14 +84,101 @@ async def _valuation(state: AnalystTeamState) -> dict[str, object]:
 
 
 async def _report_writer(state: AnalystTeamState) -> dict[str, object]:
-    report = await run_report_writer(
-        ticker=state["ticker"],
-        financials=state["financials"],
-        ratios=state["ratios"],
-        sentiment=state["sentiment"],
-        valuation=state["valuation"],
-    )
-    return {"report": report, "messages": ["report_writer: completed"]}
+    try:
+        report = await run_report_writer(
+            ticker=state["ticker"],
+            financials=state["financials"],
+            ratios=state["ratios"],
+            sentiment=state["sentiment"],
+            valuation=state["valuation"],
+            previous_report=state["report"],
+            revision_instructions=state["revision_instructions"],
+        )
+    except Exception as exc:  # noqa: BLE001 - keep last valid draft available for HITL
+        if state["report"] is None:
+            raise
+        return {
+            "quality_flag": "writer_failed",
+            "revision_instructions": None,
+            "errors": [f"report_writer: {exc}"],
+            "messages": [f"report_writer: failed - {exc}"],
+        }
+    updates: dict[str, object] = {
+        "report": report,
+        "revision_instructions": None,
+        "messages": ["report_writer: completed"],
+    }
+    if state["first_report"] is None:
+        updates["first_report"] = report
+    return updates
+
+
+def _route_after_report_writer(state: AnalystTeamState) -> str:
+    if state["quality_flag"] == "writer_failed":
+        return "hitl"
+    return "critic"
+
+
+def _source_urls(state: AnalystTeamState) -> list[str]:
+    sentiment = state["sentiment"]
+    return [article.url for article in sentiment.articles] if sentiment else []
+
+
+def _critic_updates(state: AnalystTeamState, review: CriticReview) -> dict[str, object]:
+    needs_revision = review.score < CRITIC_QUALITY_THRESHOLD
+    revision_count = state["revision_count"] + 1 if needs_revision else state["revision_count"]
+    quality_flag = None
+    if not needs_revision:
+        quality_flag = "accepted"
+    elif revision_count >= _MAX_REVISIONS:
+        quality_flag = "max_revisions_reached"
+
+    updates: dict[str, object] = {
+        "critic_review": review,
+        "revision_count": revision_count,
+        "revision_instructions": review.revision_instructions if needs_revision else None,
+        "quality_flag": quality_flag,
+        "messages": [f"critic: {review.verdict} ({review.score:.2f})"],
+    }
+    if state["first_critic_review"] is None:
+        updates["first_critic_review"] = review
+    return updates
+
+
+async def _critic(state: AnalystTeamState) -> dict[str, object]:
+    report = state["report"]
+    if report is None:
+        raise ValueError("critic invoked before report_writer produced a report")
+    try:
+        review = await run_report_critic(
+            ticker=state["ticker"],
+            report=report,
+            ratios=state["ratios"],
+            source_urls=_source_urls(state),
+        )
+    except Exception as exc:  # noqa: BLE001 - a critic outage should not block HITL review
+        return {
+            "critic_review": CriticReview(
+                score=0.0,
+                verdict="accept",
+                revision_instructions=f"Critic failed: {exc}",
+            ),
+            "quality_flag": "critic_failed",
+            "errors": [f"critic: {exc}"],
+            "messages": [f"critic: failed - {exc}"],
+        }
+
+    return _critic_updates(state, review)
+
+
+def _route_after_critic(state: AnalystTeamState) -> str:
+    if state["quality_flag"] in {"accepted", "max_revisions_reached", "critic_failed"}:
+        return "hitl"
+    return "report_writer"
+
+
+async def _hitl(state: AnalystTeamState) -> dict[str, object]:
+    return {"hitl_status": "ready", "messages": ["hitl: ready"]}
 
 
 def build_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
@@ -93,11 +192,19 @@ def build_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> CompiledState
     graph.add_node("news_branch", _news_branch)
     graph.add_node("valuation", _valuation)
     graph.add_node("report_writer", _report_writer)
+    graph.add_node("critic", _critic)
+    graph.add_node("hitl", _hitl)
     graph.add_conditional_edges(START, _fan_out, ["financials_branch", "news_branch"])
     graph.add_edge("financials_branch", "valuation")
     graph.add_edge("news_branch", "valuation")
     graph.add_edge("valuation", "report_writer")
-    graph.add_edge("report_writer", END)
+    graph.add_conditional_edges(
+        "report_writer", _route_after_report_writer, {"critic": "critic", "hitl": "hitl"}
+    )
+    graph.add_conditional_edges(
+        "critic", _route_after_critic, {"report_writer": "report_writer", "hitl": "hitl"}
+    )
+    graph.add_edge("hitl", END)
     return graph.compile(checkpointer=checkpointer)
 
 
@@ -137,6 +244,13 @@ async def run_team_analysis(
         "sentiment": None,
         "valuation": None,
         "report": None,
+        "first_report": None,
+        "critic_review": None,
+        "first_critic_review": None,
+        "revision_instructions": None,
+        "revision_count": 0,
+        "quality_flag": None,
+        "hitl_status": None,
         "messages": [],
         "errors": [],
     }

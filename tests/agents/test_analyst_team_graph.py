@@ -7,6 +7,7 @@ from app.agents import analyst_team_graph
 from app.models import (
     AnalystReport,
     ArticleSentiment,
+    CriticReview,
     FinancialStatements,
     FundamentalRatios,
     NewsSentimentResult,
@@ -74,6 +75,11 @@ def _report() -> AnalystReport:
 @pytest.fixture(autouse=True)
 def _init_with_in_memory_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
     analyst_team_graph.init_analyst_team_graph(InMemorySaver())
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        return CriticReview(score=0.9, verdict="accept", revision_instructions="")
+
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
     yield
     monkeypatch.setattr(analyst_team_graph, "_compiled_graph", None)
 
@@ -289,3 +295,229 @@ async def test_both_branches_degraded_still_reaches_report_writer(
     assert result["report"] == _report()
     assert report_calls[0]["financials"] is None
     assert report_calls[0]["sentiment"].sentiment == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_critic_loop_revises_once_then_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    report_calls: list[object] = []
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        report_calls.append(kwargs.get("revision_instructions"))
+        return _report().model_copy(update={"executive_summary": f"draft {len(report_calls)}"})
+
+    reviews = [
+        CriticReview(score=0.5, verdict="revise", revision_instructions="Fix citations."),
+        CriticReview(score=0.9, verdict="accept", revision_instructions=""),
+    ]
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        return reviews.pop(0)
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert report_calls == [None, "Fix citations."]
+    assert result["first_critic_review"].score == 0.5
+    assert result["critic_review"].score == 0.9
+    assert result["revision_count"] == 1
+    assert result["quality_flag"] == "accepted"
+    assert result["hitl_status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_critic_loop_stops_at_three_revision_reviews(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    report_calls = 0
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        nonlocal report_calls
+        report_calls += 1
+        return _report().model_copy(update={"executive_summary": f"draft {report_calls}"})
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        return CriticReview(score=0.4, verdict="revise", revision_instructions="Try again.")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert report_calls == 3
+    assert result["revision_count"] == 3
+    assert result["quality_flag"] == "max_revisions_reached"
+    assert result["hitl_status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_initial_report_writer_failure_propagates_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        raise ValueError("structured output failed")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+
+    with pytest.raises(ValueError, match="structured output failed"):
+        await analyst_team_graph.run_team_analysis("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_revision_report_writer_failure_routes_last_report_to_hitl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    report_calls = 0
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        nonlocal report_calls
+        report_calls += 1
+        if report_calls == 2:
+            raise TimeoutError("writer unavailable")
+        return _report().model_copy(update={"executive_summary": "first draft"})
+
+    critic_calls = 0
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        nonlocal critic_calls
+        critic_calls += 1
+        return CriticReview(score=0.4, verdict="revise", revision_instructions="Try again.")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert report_calls == 2
+    assert critic_calls == 1
+    assert result["hitl_status"] == "ready"
+    assert result["quality_flag"] == "writer_failed"
+    assert result["report"] == result["first_report"]
+    assert result["report"].executive_summary == "first draft"
+    assert result["revision_instructions"] is None
+    assert result["errors"] == ["report_writer: writer unavailable"]
+
+
+@pytest.mark.asyncio
+async def test_critic_failure_routes_to_hitl_with_quality_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        return _report()
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        raise TimeoutError("critic unavailable")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert result["hitl_status"] == "ready"
+    assert result["quality_flag"] == "critic_failed"
+    assert result["critic_review"] == CriticReview(
+        score=0.0, verdict="accept", revision_instructions="Critic failed: critic unavailable"
+    )

@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 from app.agents import report_writer_graph
-from app.models import AnalystReport, ArticleSentiment, NewsSentimentResult, ValuationResult
+from app.models import (
+    AnalystReport,
+    ArticleSentiment,
+    INVESTMENT_DISCLAIMER,
+    NewsSentimentResult,
+    ValuationResult,
+)
 
 
 class _FakeReportLLM:
@@ -15,6 +21,28 @@ class _FakeReportLLM:
     async def ainvoke(self, prompt: str) -> AnalystReport:
         self.invoke_count += 1
         self.last_prompt = prompt
+        return self._report
+
+
+class _FlakyReportLLM:
+    def __init__(self, report: AnalystReport) -> None:
+        self._report = report
+        self.invoke_count = 0
+
+    async def ainvoke(self, prompt: str) -> AnalystReport | None:
+        self.invoke_count += 1
+        return None if self.invoke_count == 1 else self._report
+
+
+class _TransientErrorReportLLM:
+    def __init__(self, report: AnalystReport) -> None:
+        self._report = report
+        self.invoke_count = 0
+
+    async def ainvoke(self, prompt: str) -> AnalystReport:
+        self.invoke_count += 1
+        if self.invoke_count == 1:
+            raise TimeoutError("temporary")
         return self._report
 
 
@@ -62,7 +90,7 @@ async def test_run_report_writer_always_overrides_disclaimer(
         ticker="AAPL", financials=None, ratios=None, sentiment=_sentiment(), valuation=_valuation()
     )
 
-    assert result.disclaimer == report_writer_graph._DISCLAIMER
+    assert result.disclaimer == INVESTMENT_DISCLAIMER
     assert result.disclaimer != "whatever the LLM made up"
     assert result.executive_summary == "Strong quarter."
     assert fake_llm.invoke_count == 1
@@ -91,3 +119,83 @@ async def test_run_report_writer_raises_a_clear_error_when_llm_returns_none(
             sentiment=_sentiment(),
             valuation=_valuation(),
         )
+
+
+@pytest.mark.asyncio
+async def test_run_report_writer_retries_once_when_llm_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = AnalystReport(
+        ticker="AAPL",
+        executive_summary="ok",
+        financial_health="ok",
+        valuation_assessment="ok",
+        risk_factors=[],
+        key_themes=[],
+        disclaimer="ok",
+    )
+    fake_llm = _FlakyReportLLM(report)
+    monkeypatch.setattr(report_writer_graph, "_report_llm", fake_llm)
+
+    result = await report_writer_graph.run_report_writer(
+        ticker="AAPL", financials=None, ratios=None, sentiment=_sentiment(), valuation=_valuation()
+    )
+
+    assert result.executive_summary == "ok"
+    assert fake_llm.invoke_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_report_writer_retries_once_when_llm_call_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = AnalystReport(
+        ticker="AAPL",
+        executive_summary="ok",
+        financial_health="ok",
+        valuation_assessment="ok",
+        risk_factors=[],
+        key_themes=[],
+        disclaimer="ok",
+    )
+    fake_llm = _TransientErrorReportLLM(report)
+    monkeypatch.setattr(report_writer_graph, "_report_llm", fake_llm)
+
+    result = await report_writer_graph.run_report_writer(
+        ticker="AAPL", financials=None, ratios=None, sentiment=_sentiment(), valuation=_valuation()
+    )
+
+    assert result.executive_summary == "ok"
+    assert fake_llm.invoke_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_report_writer_revision_prompt_includes_prior_draft_and_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = AnalystReport(
+        ticker="AAPL",
+        executive_summary="Old summary.",
+        financial_health="Old health.",
+        valuation_assessment="Old valuation.",
+        risk_factors=["old risk"],
+        key_themes=["old theme"],
+        disclaimer="old disclaimer",
+    )
+    revised = previous.model_copy(update={"executive_summary": "Revised summary."})
+    fake_llm = _FakeReportLLM(revised)
+    monkeypatch.setattr(report_writer_graph, "_report_llm", fake_llm)
+
+    result = await report_writer_graph.run_report_writer(
+        ticker="AAPL",
+        financials=None,
+        ratios=None,
+        sentiment=_sentiment(),
+        valuation=_valuation(),
+        previous_report=previous,
+        revision_instructions="Fix numerical accuracy and add citations.",
+    )
+
+    assert result.executive_summary == "Revised summary."
+    assert "Old summary." in fake_llm.last_prompt
+    assert "Fix numerical accuracy and add citations." in fake_llm.last_prompt

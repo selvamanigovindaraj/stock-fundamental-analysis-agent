@@ -6,6 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+CRITIC_QUALITY_THRESHOLD = 0.80
+INVESTMENT_DISCLAIMER = (
+    "This report is generated for informational purposes only and does not constitute "
+    "financial advice. Consult a licensed financial advisor before making investment "
+    "decisions."
+)
+
 
 class Document(BaseModel):
     """A retrieved or ingested document chunk."""
@@ -173,6 +180,14 @@ class ValuationResult(BaseModel):
     valuation_verdict: Literal["undervalued", "fairly_valued", "overvalued", "insufficient_data"]
     vs_sector: dict[str, float | None]  # keys: "pe", "pb", "roe" -> ticker/sector-median ratio
     risk_flags: list[str]
+
+
+class CriticReview(BaseModel):
+    """Structured LLM-as-judge review of an analyst report draft."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    verdict: Literal["accept", "revise"]
+    revision_instructions: str = ""
 
 
 def _coerce_str_list(value: object) -> object:
