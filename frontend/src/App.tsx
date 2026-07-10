@@ -6,6 +6,7 @@ import {
   Container,
   CssBaseline,
   IconButton,
+  Paper,
   Stack,
   ThemeProvider,
   Toolbar,
@@ -13,6 +14,7 @@ import {
 } from "@mui/material";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
+import InsightsIcon from "@mui/icons-material/Insights";
 import { TickerForm } from "./components/TickerForm";
 import { StatusBanner } from "./components/StatusBanner";
 import { RatiosCard } from "./components/RatiosCard";
@@ -34,25 +36,37 @@ export default function App(): JSX.Element {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AppBar position="static" color="primary" enableColorOnDark>
-        <Toolbar>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Stock Fundamental Analyser
-          </Typography>
-          <IconButton color="inherit" onClick={() => setDarkMode((prev) => !prev)}>
-            {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
-          </IconButton>
-        </Toolbar>
-      </AppBar>
-      <Container maxWidth="md">
-        <Box sx={{ my: 4 }}>
-          <Stack spacing={3}>
-            <TickerForm disabled={busy} onSubmit={run} />
-            <StatusBanner status={status} error={error} />
-            {status === "done" && data && (isAnalystReport(data) ? <ReportCard report={data} /> : <RatiosCard ratios={data} />)}
-          </Stack>
-        </Box>
-      </Container>
+      <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+        <AppBar position="static" color="primary">
+          <Toolbar>
+            <InsightsIcon sx={{ mr: 1.5 }} />
+            <Typography variant="h6" sx={{ flexGrow: 1 }}>
+              Stock Fundamental Analyser
+            </Typography>
+            <IconButton color="inherit" onClick={() => setDarkMode((prev) => !prev)}>
+              {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
+            </IconButton>
+          </Toolbar>
+        </AppBar>
+        <Container maxWidth="md">
+          <Box sx={{ my: 4 }}>
+            <Stack spacing={3}>
+              <Paper sx={{ p: 3 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  Run a fundamental analysis
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                  Enter a ticker and pick a pipeline. Data streams live from the multi-agent
+                  backend as each stage completes.
+                </Typography>
+                <TickerForm disabled={busy} onSubmit={run} />
+              </Paper>
+              <StatusBanner status={status} error={error} />
+              {status === "done" && data && (isAnalystReport(data) ? <ReportCard report={data} /> : <RatiosCard ratios={data} />)}
+            </Stack>
+          </Box>
+        </Container>
+      </Box>
     </ThemeProvider>
   );
 }
