@@ -97,16 +97,23 @@ class _FakeCompiledTeamGraph:
 
 
 @pytest.mark.asyncio
-async def test_run_team_analysis_defaults_thread_id_to_ticker_team(
+async def test_run_team_analysis_defaults_to_unique_thread_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_graph = _FakeCompiledTeamGraph()
     monkeypatch.setattr(analyst_team_graph, "_compiled_graph", fake_graph)
 
     await analyst_team_graph.run_team_analysis("AAPL")
-
     assert fake_graph.captured_config is not None
-    assert fake_graph.captured_config["configurable"]["thread_id"] == "AAPL:team"
+    first_thread_id = fake_graph.captured_config["configurable"]["thread_id"]
+
+    await analyst_team_graph.run_team_analysis("AAPL")
+    assert fake_graph.captured_config is not None
+    second_thread_id = fake_graph.captured_config["configurable"]["thread_id"]
+
+    assert first_thread_id.startswith("AAPL:team:")
+    assert second_thread_id.startswith("AAPL:team:")
+    assert first_thread_id != second_thread_id
 
 
 @pytest.mark.asyncio
@@ -129,6 +136,44 @@ async def test_run_team_analysis_accepts_thread_id_and_config_overrides(
     assert fake_graph.captured_config["callbacks"] == ["fake-callback"]
     assert fake_graph.captured_config["configurable"]["other_key"] == "x"
     assert fake_graph.captured_config["configurable"]["thread_id"] == "custom-thread"
+
+
+@pytest.mark.asyncio
+async def test_financials_branch_uses_parent_thread_id_for_nested_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_thread_id = ""
+
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        nonlocal captured_thread_id
+        captured_thread_id = thread_id or ""
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+
+    await analyst_team_graph._financials_branch(
+        {
+            "ticker": "AAPL",
+            "financials": None,
+            "ratios": None,
+            "sentiment": None,
+            "valuation": None,
+            "report": None,
+            "messages": [],
+            "errors": [],
+        },
+        {"configurable": {"thread_id": "team-thread"}},
+    )
+
+    assert captured_thread_id == "team-thread:financials"
 
 
 @pytest.mark.asyncio

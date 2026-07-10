@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, TypedDict, cast
+from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -43,9 +44,10 @@ async def _financials_branch(state: AnalystTeamState, config: RunnableConfig) ->
     # news_branch run concurrently in the same superstep, so returning unchanged scalar
     # keys (e.g. `ticker`, which has no reducer) from both would raise InvalidUpdateError.
     ticker = state["ticker"]
+    parent_thread_id = config.get("configurable", {}).get("thread_id", ticker)
     try:
         result = await run_supervisor_analysis(
-            ticker, thread_id=f"{ticker}:financials", config=config
+            ticker, thread_id=f"{parent_thread_id}:financials", config=config
         )
         return {
             "financials": result["financials"],
@@ -114,11 +116,9 @@ async def run_team_analysis(
 ) -> AnalystTeamState:
     """Analyst team entry point: ticker in, final AnalystTeamState (with `report`) out.
 
-    `thread_id`/`config` let a caller override the default `f"{ticker}:team"` checkpoint
-    thread and pass its own config through (e.g. tracing metadata) -- a static default
-    would otherwise make concurrent/repeated runs for the same ticker share/overwrite the
-    same checkpoint thread in the shared checkpointer, matching `run_supervisor_analysis`'s
-    own config-passthrough design."""
+    `thread_id`/`config` let a caller set a stable checkpoint thread when resume semantics
+    are wanted; otherwise each call gets its own thread so concurrent same-ticker requests
+    don't share state."""
     assert _compiled_graph is not None, (
         "init_analyst_team_graph() must be called before run_team_analysis()"
     )
@@ -126,7 +126,7 @@ async def run_team_analysis(
         **(config or {}),
         "configurable": {
             **(config or {}).get("configurable", {}),
-            "thread_id": thread_id or f"{ticker}:team",
+            "thread_id": thread_id or f"{ticker}:team:{uuid4().hex}",
         },
     }
     config = merged_config

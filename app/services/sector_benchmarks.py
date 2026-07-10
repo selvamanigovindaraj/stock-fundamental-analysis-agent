@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from statistics import median
 from typing import Any
 
 import yfinance as yf
@@ -44,13 +45,7 @@ async def fetch_market_ratios(ticker: str) -> tuple[float | None, float | None, 
 
 
 def _median(values: list[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    mid = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[mid]
-    return (ordered[mid - 1] + ordered[mid]) / 2
+    return median(values) if values else None
 
 
 def _degraded(sector: str, error: str) -> SectorBenchmark:
@@ -77,6 +72,9 @@ async def fetch_sector_benchmark(ticker: str) -> SectorBenchmark:
     peers = _SECTOR_PEERS.get(sector)
     if not peers:
         return _degraded(sector, f"no peer basket configured for sector {sector!r}")
+    peers = [peer for peer in peers if peer.upper() != ticker.upper()]
+    if not peers:
+        return _degraded(sector, f"no peers remain for {ticker!r} after excluding itself")
 
     results = await asyncio.gather(
         *(fetch_market_ratios(peer) for peer in peers), return_exceptions=True

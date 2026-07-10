@@ -79,42 +79,44 @@ async def main() -> None:
     init_supervisor_graph(checkpointer)
     init_analyst_team_graph(checkpointer)
 
-    tickers = [ticker for peers in TICKERS_BY_SECTOR.values() for ticker in peers]
-    print(f"Running {len(tickers)} tickers across {len(TICKERS_BY_SECTOR)} sectors...\n")
+    try:
+        tickers = [ticker for peers in TICKERS_BY_SECTOR.values() for ticker in peers]
+        print(f"Running {len(tickers)} tickers across {len(TICKERS_BY_SECTOR)} sectors...\n")
 
-    results: list[tuple[str, float, bool, str, bool]] = []
-    for ticker in tickers:
-        elapsed, ok, error = await _time_team_run(ticker)
-        benchmark = await fetch_sector_benchmark(ticker)
-        benchmark_ok = benchmark.median_pe is not None or benchmark.median_pb is not None
-        results.append((ticker, elapsed, ok, error, benchmark_ok))
-        status = "PASS" if ok else f"FAIL ({error})"
+        results: list[tuple[str, float, bool, str, bool]] = []
+        for ticker in tickers:
+            elapsed, ok, error = await _time_team_run(ticker)
+            benchmark = await fetch_sector_benchmark(ticker)
+            benchmark_ok = benchmark.median_pe is not None or benchmark.median_pb is not None
+            results.append((ticker, elapsed, ok, error, benchmark_ok))
+            status = "PASS" if ok else f"FAIL ({error})"
+            print(
+                f"{ticker:6s} {elapsed:6.1f}s  {status}  "
+                f"benchmark={'ok' if benchmark_ok else 'degraded'}"
+            )
+
+        passed = sum(1 for _, _, ok, _, _ in results if ok)
+        benchmark_successes = sum(1 for *_, benchmark_ok in results if benchmark_ok)
+        avg_time = sum(elapsed for _, elapsed, *_ in results) / len(results)
+
+        print(f"\n{passed}/{len(results)} tickers passed")
+        print(f"benchmark-fetch success rate: {benchmark_successes}/{len(results)}")
+        print(f"average time per ticker: {avg_time:.1f}s (budget: {TIME_BUDGET_SECONDS:.0f}s)")
+        if avg_time > TIME_BUDGET_SECONDS:
+            print(
+                f"WARNING: average time {avg_time:.1f}s exceeds the "
+                f"{TIME_BUDGET_SECONDS:.0f}s budget"
+            )
+
+        parallel_time, _, _ = await _time_team_run(SPEEDUP_TICKER)
+        sequential_time = await _time_sequential_baseline(SPEEDUP_TICKER)
+        speedup = sequential_time / parallel_time if parallel_time else float("nan")
         print(
-            f"{ticker:6s} {elapsed:6.1f}s  {status}  "
-            f"benchmark={'ok' if benchmark_ok else 'degraded'}"
+            f"\nspeedup sample ({SPEEDUP_TICKER}): sequential={sequential_time:.1f}s "
+            f"parallel={parallel_time:.1f}s speedup={speedup:.2f}x"
         )
-
-    passed = sum(1 for _, _, ok, _, _ in results if ok)
-    benchmark_successes = sum(1 for *_, benchmark_ok in results if benchmark_ok)
-    avg_time = sum(elapsed for _, elapsed, *_ in results) / len(results)
-
-    print(f"\n{passed}/{len(results)} tickers passed")
-    print(f"benchmark-fetch success rate: {benchmark_successes}/{len(results)}")
-    print(f"average time per ticker: {avg_time:.1f}s (budget: {TIME_BUDGET_SECONDS:.0f}s)")
-    if avg_time > TIME_BUDGET_SECONDS:
-        print(
-            f"WARNING: average time {avg_time:.1f}s exceeds the {TIME_BUDGET_SECONDS:.0f}s budget"
-        )
-
-    parallel_time, _, _ = await _time_team_run(SPEEDUP_TICKER)
-    sequential_time = await _time_sequential_baseline(SPEEDUP_TICKER)
-    speedup = sequential_time / parallel_time if parallel_time else float("nan")
-    print(
-        f"\nspeedup sample ({SPEEDUP_TICKER}): sequential={sequential_time:.1f}s "
-        f"parallel={parallel_time:.1f}s speedup={speedup:.2f}x"
-    )
-
-    await close_pool(pool)
+    finally:
+        await close_pool(pool)
 
 
 if __name__ == "__main__":

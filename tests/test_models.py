@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from app.models import AnalystReport
+from app.models import AnalystReport, ArticleSentiment, NewsSentimentResult
 
 
 def _report(**overrides: object) -> AnalystReport:
@@ -68,3 +69,23 @@ def test_list_fields_coerce_none_to_an_empty_list(field: str) -> None:
     Pydantic's `list[str]` validation, which would raise (caught in PR review)."""
     report = _report(**{field: None})
     assert getattr(report, field) == []
+
+
+@pytest.mark.parametrize("field", ["risk_factors", "key_themes"])
+def test_list_fields_coerce_empty_string_to_an_empty_list(field: str) -> None:
+    report = _report(**{field: "   "})
+    assert getattr(report, field) == []
+
+
+def test_sentiment_scores_are_bounded() -> None:
+    with pytest.raises(ValidationError):
+        ArticleSentiment(title="t", url="u", sentiment="positive", score=1.1)
+
+    with pytest.raises(ValidationError):
+        NewsSentimentResult(
+            ticker="AAPL",
+            sentiment="positive",
+            score=-0.1,
+            key_themes=[],
+            articles=[],
+        )

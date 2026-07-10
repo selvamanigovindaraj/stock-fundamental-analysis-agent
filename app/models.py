@@ -4,7 +4,7 @@ import json
 import re
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Document(BaseModel):
@@ -142,7 +142,7 @@ class ArticleSentiment(BaseModel):
     title: str
     url: str
     sentiment: Literal["positive", "neutral", "negative"]
-    score: float  # 0.0 (most negative) .. 1.0 (most positive); 0.5 = neutral
+    score: float = Field(ge=0.0, le=1.0)  # 0.0 (most negative) .. 1.0 (most positive)
 
 
 class NewsSentimentResult(BaseModel):
@@ -150,7 +150,7 @@ class NewsSentimentResult(BaseModel):
 
     ticker: str
     sentiment: Literal["positive", "neutral", "negative"]
-    score: float  # same 0.0-1.0 scale as ArticleSentiment, aggregated across articles
+    score: float = Field(ge=0.0, le=1.0)  # same 0.0-1.0 scale as ArticleSentiment
     key_themes: list[str]
     articles: list[ArticleSentiment]
 
@@ -185,6 +185,8 @@ def _coerce_str_list(value: object) -> object:
     if not isinstance(value, str):
         return value
     stripped = value.strip()
+    if not stripped:
+        return []
     if stripped.startswith("[") and stripped.endswith("]"):
         try:
             parsed = json.loads(stripped)

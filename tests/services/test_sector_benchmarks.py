@@ -107,6 +107,31 @@ async def test_fetch_sector_benchmark_computes_median_across_peers(
 
 
 @pytest.mark.asyncio
+async def test_fetch_sector_benchmark_excludes_ticker_from_own_peer_basket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sector_benchmarks,
+        "_SECTOR_PEERS",
+        {"Communication Services": ["META", "GOOGL", "NFLX"]},
+    )
+    peer_info = {
+        "GOOGL": {"sector": "Communication Services"},
+        "META": {"trailingPE": 20.0, "priceToBook": 5.0, "returnOnEquity": 0.2},
+        "NFLX": {"trailingPE": 40.0, "priceToBook": 9.0, "returnOnEquity": 0.4},
+    }
+
+    monkeypatch.setattr(
+        sector_benchmarks.yf, "Ticker", lambda ticker: _fake_ticker(peer_info[ticker])
+    )
+
+    benchmark = await sector_benchmarks.fetch_sector_benchmark("GOOGL")
+
+    assert benchmark.peers_used == ["META", "NFLX"]
+    assert benchmark.median_pe == 30.0
+
+
+@pytest.mark.asyncio
 async def test_fetch_sector_benchmark_degrades_on_unknown_sector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
