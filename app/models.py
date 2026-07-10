@@ -175,6 +175,14 @@ class ValuationResult(BaseModel):
     risk_flags: list[str]
 
 
+class CriticReview(BaseModel):
+    """Structured LLM-as-judge review of an analyst report draft."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    verdict: Literal["accept", "revise"]
+    revision_instructions: str
+
+
 def _coerce_str_list(value: object) -> object:
     # DeepSeek's structured output occasionally returns a JSON-stringified array or a
     # numbered/bulleted multiline string instead of a real list for these fields (found via

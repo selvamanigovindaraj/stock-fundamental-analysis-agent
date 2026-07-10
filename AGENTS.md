@@ -113,13 +113,13 @@ earlier session silently served stale code (missing the new route entirely, 404s
 looking otherwise healthy. `docker compose up -d --build backend` after backend code
 changes, not just leaving an old container running, is required before verifying live.
 
-## 5-Agent Analyst Team (News/Sentiment + Valuation + Report-Writer)
+## Analyst Team (News/Sentiment + Valuation + Report-Writer + Critic)
 
 `app.agents.analyst_team_graph.run_team_analysis(ticker)` is a real, working
 implementation, wired to `GET /report/{ticker}/stream` (same SSE shape as the other two
-routes). Expands the 2-agent supervisor above into 5 agents: `Send`-based fan-out of
+routes). Expands the 2-agent supervisor above into an analyst team: `Send`-based fan-out of
 Data-Ingestion+Ratio-Analysis (the existing supervisor, reused unchanged as a black-box
-branch) and News/Sentiment, converging into Valuation then Report-Writer. **True 3-way
+branch) and News/Sentiment, converging into Valuation, Report-Writer, then Critic. **True 3-way
 parallelism is impossible** — Ratio Analysis needs Data Ingestion's own output — so the
 fan-out is 2-way (financials branch, news branch); Ratio Analysis runs sequentially inside
 the financials branch, which is fine since it's pure/fast (no I/O). No LLM-driven routing
@@ -170,7 +170,15 @@ mock the LLM):
    the whole report after ~20s of prior agent work. `NewsSentimentResult` has a similar,
    rarer failure mode (the LLM occasionally omits every field but `ticker`) that's already
    handled by `news_sentiment_graph.py`'s existing degrade-to-neutral path, not a new bug.
-3. The verification script's own "sequential baseline" measurement was comparing unequal
+3. The Critic Agent (`app/agents/report_critic_graph.py`) uses DeepSeek structured output
+   with the same non-thinking routing model constraint as the other structured-output agents.
+   Live verify found `Report-Writer` can still return `None` twice for a ticker; the direct
+   `run_report_writer(...)` API still raises clearly, but the analyst-team graph keeps a
+   fallback draft so the bounded critic loop can revise instead of aborting the whole run.
+   Latest 10-ticker critic eval (`uv run python scripts/evaluate_critic_loop.py`) measured
+   average first-draft→final score improvement of **+0.27**, above the +0.10 gate; some
+   tickers still hit `max_revisions_reached` and proceed with the best draft.
+4. The verification script's own "sequential baseline" measurement was comparing unequal
    work (only timing 2 of the 5 agents against the full 5-agent parallel run), making its
    speedup number meaningless — fixed to run the same 5-agent total workload sequentially.
    Real, corrected result: **10/10 tickers passed, 19.0s average (well under the 120s

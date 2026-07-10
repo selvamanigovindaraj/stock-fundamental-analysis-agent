@@ -22,6 +22,7 @@ _DISCLAIMER = (
     "financial advice. Consult a licensed financial advisor before making investment "
     "decisions."
 )
+_REPORT_ATTEMPTS = 2
 
 
 class ReportWriterState(TypedDict):
@@ -30,6 +31,8 @@ class ReportWriterState(TypedDict):
     ratios: FundamentalRatios | None
     sentiment: NewsSentimentResult | None
     valuation: ValuationResult | None
+    previous_report: AnalystReport | None
+    revision_instructions: str | None
     report: AnalystReport | None
 
 
@@ -55,20 +58,34 @@ def _get_report_llm() -> Runnable[str, AnalystReport]:
 
 
 def _report_prompt(state: ReportWriterState) -> str:
-    return (
+    prompt = (
         f"Write an analyst report for {state['ticker']} using the following data.\n\n"
         f"Financial statements: {state['financials']}\n\n"
         f"Fundamental ratios: {state['ratios']}\n\n"
         f"News sentiment: {state['sentiment']}\n\n"
         f"Valuation vs. sector: {state['valuation']}\n\n"
+        "When making narrative claims, include inline source URLs from the news sentiment "
+        "articles when available.\n\n"
         "Produce an executive_summary, financial_health assessment, valuation_assessment, "
         "risk_factors, and key_themes. Leave the disclaimer field empty -- it is filled in "
         "separately."
     )
+    if state["previous_report"] is not None and state["revision_instructions"]:
+        prompt += (
+            "\n\nRevise this prior draft instead of starting from scratch.\n"
+            f"Prior draft: {state['previous_report']}\n\n"
+            f"Revision instructions: {state['revision_instructions']}"
+        )
+    return prompt
 
 
 async def _write(state: ReportWriterState) -> ReportWriterState:
-    report = await _get_report_llm().ainvoke(_report_prompt(state))
+    prompt = _report_prompt(state)
+    report = None
+    for _ in range(_REPORT_ATTEMPTS):
+        report = await _get_report_llm().ainvoke(prompt)
+        if report is not None:
+            break
     if report is None:
         # with_structured_output can return None if the LLM's output fails to parse. This
         # is the terminal step of the pipeline -- unlike news_sentiment's neutral fallback,
@@ -102,6 +119,8 @@ async def run_report_writer(
     ratios: FundamentalRatios | None,
     sentiment: NewsSentimentResult | None,
     valuation: ValuationResult | None,
+    previous_report: AnalystReport | None = None,
+    revision_instructions: str | None = None,
 ) -> AnalystReport:
     """Report-Writer Agent entry point: all upstream agent outputs in, final AnalystReport out."""
     result = await _compiled_graph.ainvoke(
@@ -111,6 +130,8 @@ async def run_report_writer(
             "ratios": ratios,
             "sentiment": sentiment,
             "valuation": valuation,
+            "previous_report": previous_report,
+            "revision_instructions": revision_instructions,
             "report": None,
         }
     )
