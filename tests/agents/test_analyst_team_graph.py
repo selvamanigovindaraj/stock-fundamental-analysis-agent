@@ -427,6 +427,61 @@ async def test_initial_report_writer_failure_propagates_clear_error(
 
 
 @pytest.mark.asyncio
+async def test_revision_report_writer_failure_routes_last_report_to_hitl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    report_calls = 0
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        nonlocal report_calls
+        report_calls += 1
+        if report_calls == 2:
+            raise TimeoutError("writer unavailable")
+        return _report().model_copy(update={"executive_summary": "first draft"})
+
+    critic_calls = 0
+
+    async def fake_run_report_critic(**kwargs: object) -> CriticReview:
+        nonlocal critic_calls
+        critic_calls += 1
+        return CriticReview(score=0.4, verdict="revise", revision_instructions="Try again.")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+    monkeypatch.setattr(analyst_team_graph, "run_report_critic", fake_run_report_critic)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert report_calls == 2
+    assert critic_calls == 1
+    assert result["hitl_status"] == "ready"
+    assert result["quality_flag"] == "writer_failed"
+    assert result["report"] == result["first_report"]
+    assert result["report"].executive_summary == "first draft"
+    assert result["revision_instructions"] is None
+    assert result["errors"] == ["report_writer: writer unavailable"]
+
+
+@pytest.mark.asyncio
 async def test_critic_failure_routes_to_hitl_with_quality_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

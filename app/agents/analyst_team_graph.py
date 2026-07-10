@@ -84,15 +84,25 @@ async def _valuation(state: AnalystTeamState) -> dict[str, object]:
 
 
 async def _report_writer(state: AnalystTeamState) -> dict[str, object]:
-    report = await run_report_writer(
-        ticker=state["ticker"],
-        financials=state["financials"],
-        ratios=state["ratios"],
-        sentiment=state["sentiment"],
-        valuation=state["valuation"],
-        previous_report=state["report"],
-        revision_instructions=state["revision_instructions"],
-    )
+    try:
+        report = await run_report_writer(
+            ticker=state["ticker"],
+            financials=state["financials"],
+            ratios=state["ratios"],
+            sentiment=state["sentiment"],
+            valuation=state["valuation"],
+            previous_report=state["report"],
+            revision_instructions=state["revision_instructions"],
+        )
+    except Exception as exc:  # noqa: BLE001 - keep last valid draft available for HITL
+        if state["report"] is None:
+            raise
+        return {
+            "quality_flag": "writer_failed",
+            "revision_instructions": None,
+            "errors": [f"report_writer: {exc}"],
+            "messages": [f"report_writer: failed - {exc}"],
+        }
     updates: dict[str, object] = {
         "report": report,
         "revision_instructions": None,
@@ -101,6 +111,12 @@ async def _report_writer(state: AnalystTeamState) -> dict[str, object]:
     if state["first_report"] is None:
         updates["first_report"] = report
     return updates
+
+
+def _route_after_report_writer(state: AnalystTeamState) -> str:
+    if state["quality_flag"] == "writer_failed":
+        return "hitl"
+    return "critic"
 
 
 def _source_urls(state: AnalystTeamState) -> list[str]:
@@ -182,7 +198,9 @@ def build_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> CompiledState
     graph.add_edge("financials_branch", "valuation")
     graph.add_edge("news_branch", "valuation")
     graph.add_edge("valuation", "report_writer")
-    graph.add_edge("report_writer", "critic")
+    graph.add_conditional_edges(
+        "report_writer", _route_after_report_writer, {"critic": "critic", "hitl": "hitl"}
+    )
     graph.add_conditional_edges(
         "critic", _route_after_critic, {"report_writer": "report_writer", "hitl": "hitl"}
     )
