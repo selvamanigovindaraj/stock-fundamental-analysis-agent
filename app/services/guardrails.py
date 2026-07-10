@@ -108,12 +108,16 @@ def redact_unsupported_report_numbers(
     allowed = _ratio_numbers(ratios)
 
     def redact_text(text: str) -> str:
-        date_spans = [match.span() for match in _NATURAL_DATE_RE.finditer(text)]
+        ignored_spans = [
+            match.span()
+            for pattern in (_NATURAL_DATE_RE, _DATE_RE, _URL_RE)
+            for match in pattern.finditer(text)
+        ]
 
         def replace(match: re.Match[str]) -> str:
             token = match.group(0)
             start, end = match.span()
-            if any(date_start <= start and end <= date_end for date_start, date_end in date_spans):
+            if any(istart <= start and end <= iend for istart, iend in ignored_spans):
                 return token
             value = float(token.rstrip("%").replace(",", ""))
             return token if _supported(value, allowed) else "[unsupported figure removed]"

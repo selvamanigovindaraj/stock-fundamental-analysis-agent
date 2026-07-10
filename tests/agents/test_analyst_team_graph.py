@@ -258,6 +258,45 @@ async def test_financials_branch_failure_does_not_block_the_rest_of_the_pipeline
 
 
 @pytest.mark.asyncio
+async def test_number_guardrail_no_ops_when_ratios_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documented, accepted behavior (see AGENTS.md): on a degraded financials
+    branch there's nothing to validate numbers against, so the guardrail can't
+    flag or redact unsourced figures -- it isn't a bug, just a limit of the check.
+    """
+
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        raise SourceUnavailableError(f"{ticker}: all sources failed")
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
+
+    invented_report = _report().model_copy(
+        update={"executive_summary": "Invented upside is 42%."}
+    )
+
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        return invented_report
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+
+    result = await analyst_team_graph.run_team_analysis("AAPL")
+
+    assert result["ratios"] is None
+    assert result["revision_count"] == 0  # guardrail never requested a revision
+    assert result["report"].executive_summary == "Invented upside is 42%."
+
+
+@pytest.mark.asyncio
 async def test_both_branches_degraded_still_reaches_report_writer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

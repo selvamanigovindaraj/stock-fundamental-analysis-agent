@@ -86,6 +86,17 @@ def test_natural_language_dates_are_not_redacted_as_financial_figures() -> None:
     )
 
 
+def test_iso_dates_and_urls_are_not_redacted_as_financial_figures() -> None:
+    report = _report(
+        "Filed on 2025-01-01, see https://example.com/filing-2025 for details."
+    )
+
+    assert find_unsupported_report_numbers(report, _ratios()) == []
+    assert redact_unsupported_report_numbers(report, _ratios()).executive_summary == (
+        "Filed on 2025-01-01, see https://example.com/filing-2025 for details."
+    )
+
+
 @pytest.mark.parametrize(
     "ticker",
     [

@@ -132,7 +132,10 @@ final report output passes through deterministic guardrails between Report-Write
 before HITL. Keep numeric hallucination/PII/disclaimer checks there rather than scattering
 LLM-specific checks through individual prompts; unsupported report figures become bounded
 revision requests through the existing critic loop, then are deterministically redacted after
-max revisions so the public report never returns unsourced numbers.
+max revisions. This guarantee only holds when `ratios` is available — on a degraded
+financials branch (`SourceUnavailableError`, `ratios=None`), both guardrail checks
+intentionally no-op (nothing to validate numbers against), so a report on that path may still
+contain unverified figures; this is accepted, tested behavior, not a gap.
 
 **Checkpoint/trace nesting**: reusing the supervisor as a branch meant its
 `run_supervisor_analysis` needed a way to avoid colliding with the outer graph's own
