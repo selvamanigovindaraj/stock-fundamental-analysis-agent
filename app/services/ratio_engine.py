@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from app.models import FinancialStatements, FundamentalRatios
+from app.services.guardrails import sanitize_ticker
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -50,5 +51,6 @@ class RatioEngine:
         """Fetch financials for `ticker` via the ingestion subgraph, then compute ratios."""
         from app.agents.ingestion_graph import run_ingestion
 
+        ticker = sanitize_ticker(ticker)
         statements = await run_ingestion(ticker)
         return RatioEngine.compute(statements)

@@ -140,7 +140,7 @@ async def test_full_sequence_ingestion_then_ratio_analysis_then_finish(
 @pytest.mark.asyncio
 async def test_ingestion_failure_raises_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_ingestion(ticker: str) -> FinancialStatements:
-        raise SourceUnavailableError("all sources failed for BADTICKER")
+        raise SourceUnavailableError("all sources failed for ZZZZ")
 
     monkeypatch.setattr(supervisor_graph, "run_ingestion", fake_run_ingestion)
 
@@ -164,7 +164,7 @@ async def test_ingestion_failure_raises_source_unavailable(monkeypatch: pytest.M
     monkeypatch.setattr(supervisor_graph, "_routing_llm", routing_llm)
 
     with pytest.raises(SourceUnavailableError):
-        await supervisor_graph.run_supervisor_analysis("BADTICKER")
+        await supervisor_graph.run_supervisor_analysis("ZZZZ")
 
     assert ratio_analysis_calls == 0
 

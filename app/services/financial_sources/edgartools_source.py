@@ -10,6 +10,7 @@ import pandas as pd
 from app.config import get_settings
 from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import sanitize_ticker
 
 _PERIOD_COL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _DEBT_CONCEPTS = ("ShortTermDebt", "CurrentPortionOfLongTermDebt", "LongTermDebt")
@@ -71,6 +72,7 @@ def _optional_concept_value(
 
 async def fetch_financials(ticker: str) -> FinancialStatements:
     """Fetch and normalize income statement, balance sheet, and cash flow via edgartools."""
+    ticker = sanitize_ticker(ticker)
 
     def _fetch() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         edgar.set_identity(get_settings().sec_edgar_user_agent or "stock-fundamental-analyser research@example.com")

@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -12,11 +12,19 @@ from app.agents.analyst_team_graph import run_team_analysis
 from app.agents.supervisor_graph import run_supervisor_analysis
 from app.models import AnalystReport, FundamentalRatios
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import GuardrailViolation, sanitize_ticker
 from app.services.ratio_engine import RatioEngine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _validated_ticker(ticker: str) -> str:
+    try:
+        return sanitize_ticker(ticker)
+    except GuardrailViolation as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _sse_stream(
@@ -57,6 +65,7 @@ async def _fetch_report(ticker: str) -> AnalystReport:
 @router.get("/fundamentals/{ticker}/stream")
 async def stream_fundamentals(ticker: str) -> StreamingResponse:
     """Stream DataIngestionAgent + RatioEngine progress for a ticker via SSE."""
+    ticker = _validated_ticker(ticker)
     return StreamingResponse(_sse_stream(ticker, _fetch_ratios), media_type="text/event-stream")
 
 
@@ -64,6 +73,7 @@ async def stream_fundamentals(ticker: str) -> StreamingResponse:
 async def stream_analysis(ticker: str) -> StreamingResponse:
     """Stream multi-agent Supervisor (DataIngestionAgent -> RatioAnalysisAgent) progress for
     a ticker via SSE."""
+    ticker = _validated_ticker(ticker)
     return StreamingResponse(
         _sse_stream(ticker, _fetch_supervisor_ratios), media_type="text/event-stream"
     )
@@ -73,4 +83,5 @@ async def stream_analysis(ticker: str) -> StreamingResponse:
 async def stream_report(ticker: str) -> StreamingResponse:
     """Stream the full 5-agent analyst team (Data Ingestion + Ratio Analysis + News/Sentiment
     fan-out -> Valuation -> Report-Writer) progress for a ticker via SSE."""
+    ticker = _validated_ticker(ticker)
     return StreamingResponse(_sse_stream(ticker, _fetch_report), media_type="text/event-stream")

@@ -228,9 +228,14 @@ class AnalystReport(BaseModel):
     valuation_assessment: str
     risk_factors: list[str]
     key_themes: list[str]
-    disclaimer: str
+    disclaimer: str = INVESTMENT_DISCLAIMER
 
     @field_validator("risk_factors", "key_themes", mode="before")
     @classmethod
     def _coerce_list_fields(cls, v: object) -> object:
         return _coerce_str_list(v)
+
+    @field_validator("disclaimer", mode="before")
+    @classmethod
+    def _force_disclaimer(cls, v: object) -> str:
+        return INVESTMENT_DISCLAIMER

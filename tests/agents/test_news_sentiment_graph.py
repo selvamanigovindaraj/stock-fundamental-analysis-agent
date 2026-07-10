@@ -91,7 +91,7 @@ async def test_run_news_sentiment_degrades_to_neutral_on_zero_articles(
     fake_llm = _FakeSentimentLLM()
     monkeypatch.setattr(news_sentiment_graph, "_sentiment_llm", fake_llm)
 
-    result = await news_sentiment_graph.run_news_sentiment("OBSCURE")
+    result = await news_sentiment_graph.run_news_sentiment("ZZZZ")
 
     assert result.sentiment == "neutral"
     assert result.score == 0.5

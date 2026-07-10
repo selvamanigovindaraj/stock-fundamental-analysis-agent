@@ -25,6 +25,12 @@ from app.models import (
     ValuationResult,
 )
 from app.services.financial_sources import SourceUnavailableError
+from app.services.guardrails import (
+    find_unsupported_report_numbers,
+    redact_unsupported_report_numbers,
+    sanitize_ticker,
+    scan_report_pii,
+)
 
 _MAX_REVISIONS = 3
 
@@ -116,7 +122,67 @@ async def _report_writer(state: AnalystTeamState) -> dict[str, object]:
 def _route_after_report_writer(state: AnalystTeamState) -> str:
     if state["quality_flag"] == "writer_failed":
         return "hitl"
+    return "guardrails"
+
+
+def _route_after_guardrails(state: AnalystTeamState) -> str:
+    if state["quality_flag"] in {"max_revisions_reached", "guardrail_redacted"}:
+        return "hitl"
+    if state["revision_instructions"]:
+        return "report_writer"
     return "critic"
+
+
+async def _guardrails(state: AnalystTeamState) -> dict[str, object]:
+    report = state["report"]
+    if report is None:
+        raise ValueError("guardrails invoked before report_writer produced a report")
+
+    unsupported_numbers = find_unsupported_report_numbers(report, state["ratios"])
+    if unsupported_numbers:
+        if state["revision_count"] + 1 >= _MAX_REVISIONS:
+            return {
+                "report": redact_unsupported_report_numbers(report, state["ratios"]),
+                "critic_review": CriticReview(
+                    score=0.0,
+                    verdict="revise",
+                    revision_instructions=(
+                        "Guardrail redacted unsupported report figures after max revisions: "
+                        f"{', '.join(unsupported_numbers)}."
+                    ),
+                ),
+                "revision_count": _MAX_REVISIONS,
+                "revision_instructions": None,
+                "quality_flag": "guardrail_redacted",
+                "messages": ["guardrails: redacted unsupported figures after max revisions"],
+            }
+        return _critic_updates(
+            state,
+            CriticReview(
+                score=0.0,
+                verdict="revise",
+                revision_instructions=(
+                    "Remove or replace unsupported report figures: "
+                    f"{', '.join(unsupported_numbers)}."
+                ),
+            ),
+        )
+
+    pii_findings = scan_report_pii(report)
+    if pii_findings:
+        return _critic_updates(
+            state,
+            CriticReview(
+                score=0.0,
+                verdict="revise",
+                revision_instructions=(
+                    "Remove private personal data from the report: "
+                    f"{', '.join(sorted(set(pii_findings)))}."
+                ),
+            ),
+        )
+
+    return {"messages": ["guardrails: passed"]}
 
 
 def _source_urls(state: AnalystTeamState) -> list[str]:
@@ -192,6 +258,7 @@ def build_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> CompiledState
     graph.add_node("news_branch", _news_branch)
     graph.add_node("valuation", _valuation)
     graph.add_node("report_writer", _report_writer)
+    graph.add_node("guardrails", _guardrails)
     graph.add_node("critic", _critic)
     graph.add_node("hitl", _hitl)
     graph.add_conditional_edges(START, _fan_out, ["financials_branch", "news_branch"])
@@ -199,7 +266,12 @@ def build_analyst_team_graph(checkpointer: BaseCheckpointSaver) -> CompiledState
     graph.add_edge("news_branch", "valuation")
     graph.add_edge("valuation", "report_writer")
     graph.add_conditional_edges(
-        "report_writer", _route_after_report_writer, {"critic": "critic", "hitl": "hitl"}
+        "report_writer", _route_after_report_writer, {"guardrails": "guardrails", "hitl": "hitl"}
+    )
+    graph.add_conditional_edges(
+        "guardrails",
+        _route_after_guardrails,
+        {"critic": "critic", "report_writer": "report_writer", "hitl": "hitl"},
     )
     graph.add_conditional_edges(
         "critic", _route_after_critic, {"report_writer": "report_writer", "hitl": "hitl"}
@@ -229,6 +301,7 @@ async def run_team_analysis(
     assert _compiled_graph is not None, (
         "init_analyst_team_graph() must be called before run_team_analysis()"
     )
+    ticker = sanitize_ticker(ticker)
     merged_config: RunnableConfig = {
         **(config or {}),
         "configurable": {

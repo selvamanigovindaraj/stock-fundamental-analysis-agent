@@ -17,8 +17,9 @@ from app.models import (
     NewsSentimentResult,
     ValuationResult,
 )
+from app.services.guardrails import sanitize_ticker, validate_model
 
-_REPORT_ATTEMPTS = 2
+_REPORT_ATTEMPTS = 3
 
 
 class ReportWriterState(TypedDict):
@@ -98,6 +99,7 @@ async def _write(state: ReportWriterState) -> ReportWriterState:
         )
     # Deterministic compliance text -- never left to the LLM to paraphrase per-run.
     report = report.model_copy(update={"disclaimer": INVESTMENT_DISCLAIMER})
+    validate_model(report)
     return {**state, "report": report}
 
 
@@ -124,6 +126,7 @@ async def run_report_writer(
     revision_instructions: str | None = None,
 ) -> AnalystReport:
     """Report-Writer Agent entry point: all upstream agent outputs in, final AnalystReport out."""
+    ticker = sanitize_ticker(ticker)
     result = await _compiled_graph.ainvoke(
         {
             "ticker": ticker,

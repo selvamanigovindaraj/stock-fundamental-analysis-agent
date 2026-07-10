@@ -35,7 +35,7 @@ async def test_fetch_market_ratios_tolerates_none_info(monkeypatch: pytest.Monke
     AttributeError."""
     monkeypatch.setattr(sector_benchmarks.yf, "Ticker", lambda ticker: _fake_ticker(None))
 
-    pe, pb, roe = await sector_benchmarks.fetch_market_ratios("DELISTED")
+    pe, pb, roe = await sector_benchmarks.fetch_market_ratios("ZZZZ")
 
     assert (pe, pb, roe) == (None, None, None)
 
@@ -70,7 +70,7 @@ async def test_fetch_sector_benchmark_tolerates_none_info_during_sector_resoluti
 ) -> None:
     monkeypatch.setattr(sector_benchmarks.yf, "Ticker", lambda ticker: _fake_ticker(None))
 
-    benchmark = await sector_benchmarks.fetch_sector_benchmark("DELISTED")
+    benchmark = await sector_benchmarks.fetch_sector_benchmark("ZZZZ")
 
     assert benchmark.sector == "unknown"
     assert benchmark.median_pe is None
