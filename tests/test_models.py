@@ -92,10 +92,11 @@ def test_sentiment_scores_are_bounded() -> None:
 
 
 def test_critic_review_score_is_bounded_and_verdict_is_structured() -> None:
-    review = CriticReview(score=0.8, verdict="accept", revision_instructions="")
+    review = CriticReview(score=0.8, verdict="accept")
 
     assert review.score == 0.8
     assert review.verdict == "accept"
+    assert review.revision_instructions == ""
 
     with pytest.raises(ValidationError):
         CriticReview(score=1.1, verdict="accept", revision_instructions="")

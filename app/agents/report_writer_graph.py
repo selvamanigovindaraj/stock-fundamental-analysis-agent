@@ -13,15 +13,11 @@ from app.models import (
     AnalystReport,
     FinancialStatements,
     FundamentalRatios,
+    INVESTMENT_DISCLAIMER,
     NewsSentimentResult,
     ValuationResult,
 )
 
-_DISCLAIMER = (
-    "This report is generated for informational purposes only and does not constitute "
-    "financial advice. Consult a licensed financial advisor before making investment "
-    "decisions."
-)
 _REPORT_ATTEMPTS = 2
 
 
@@ -82,8 +78,13 @@ def _report_prompt(state: ReportWriterState) -> str:
 async def _write(state: ReportWriterState) -> ReportWriterState:
     prompt = _report_prompt(state)
     report = None
-    for _ in range(_REPORT_ATTEMPTS):
-        report = await _get_report_llm().ainvoke(prompt)
+    for attempt in range(_REPORT_ATTEMPTS):
+        try:
+            report = await _get_report_llm().ainvoke(prompt)
+        except Exception:
+            if attempt == _REPORT_ATTEMPTS - 1:
+                raise
+            continue
         if report is not None:
             break
     if report is None:
@@ -96,7 +97,7 @@ async def _write(state: ReportWriterState) -> ReportWriterState:
             "(LLM returned None or parsing failed)"
         )
     # Deterministic compliance text -- never left to the LLM to paraphrase per-run.
-    report = report.model_copy(update={"disclaimer": _DISCLAIMER})
+    report = report.model_copy(update={"disclaimer": INVESTMENT_DISCLAIMER})
     return {**state, "report": report}
 
 

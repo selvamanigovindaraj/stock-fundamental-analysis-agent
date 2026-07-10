@@ -75,6 +75,27 @@ async def test_run_report_critic_returns_structured_review(
     assert review == expected
     assert "numerical accuracy" in fake_llm.last_prompt
     assert "https://example.com/news" in fake_llm.last_prompt
+    assert "at least 0.80" in fake_llm.last_prompt
+
+
+@pytest.mark.asyncio
+async def test_run_report_critic_prompt_handles_missing_ratios(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = CriticReview(score=0.82, verdict="accept")
+    fake_llm = _FakeCriticLLM(expected)
+    monkeypatch.setattr(report_critic_graph, "_critic_llm", fake_llm)
+
+    review = await report_critic_graph.run_report_critic(
+        ticker="AAPL",
+        report=_report(),
+        ratios=None,
+        source_urls=[],
+    )
+
+    assert review == expected
+    assert "no ratios object is available" in fake_llm.last_prompt
+    assert "Ratios object:" not in fake_llm.last_prompt
 
 
 @pytest.mark.asyncio

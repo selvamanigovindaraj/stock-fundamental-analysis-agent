@@ -17,6 +17,7 @@ from app.agents.supervisor_graph import run_supervisor_analysis
 from app.agents.valuation_graph import run_valuation
 from app.models import (
     AnalystReport,
+    CRITIC_QUALITY_THRESHOLD,
     CriticReview,
     FinancialStatements,
     FundamentalRatios,
@@ -25,13 +26,7 @@ from app.models import (
 )
 from app.services.financial_sources import SourceUnavailableError
 
-_QUALITY_THRESHOLD = 0.80
 _MAX_REVISIONS = 3
-_FALLBACK_DISCLAIMER = (
-    "This report is generated for informational purposes only and does not constitute "
-    "financial advice. Consult a licensed financial advisor before making investment "
-    "decisions."
-)
 
 
 class AnalystTeamState(TypedDict):
@@ -88,40 +83,21 @@ async def _valuation(state: AnalystTeamState) -> dict[str, object]:
     return {"valuation": valuation, "messages": ["valuation: completed"]}
 
 
-def _fallback_report(ticker: str, exc: Exception) -> AnalystReport:
-    return AnalystReport(
-        ticker=ticker,
-        executive_summary=f"Report draft unavailable: {exc}",
-        financial_health="Report generation failed before this section could be drafted.",
-        valuation_assessment="Report generation failed before this section could be drafted.",
-        risk_factors=[],
-        key_themes=[],
-        disclaimer=_FALLBACK_DISCLAIMER,
-    )
-
-
 async def _report_writer(state: AnalystTeamState) -> dict[str, object]:
-    try:
-        report = await run_report_writer(
-            ticker=state["ticker"],
-            financials=state["financials"],
-            ratios=state["ratios"],
-            sentiment=state["sentiment"],
-            valuation=state["valuation"],
-            previous_report=state["report"],
-            revision_instructions=state["revision_instructions"],
-        )
-        errors: list[str] = []
-    except Exception as exc:  # noqa: BLE001 - keep a draft in the bounded critic loop
-        report = state["report"] or _fallback_report(state["ticker"], exc)
-        errors = [f"report_writer: {exc}"]
+    report = await run_report_writer(
+        ticker=state["ticker"],
+        financials=state["financials"],
+        ratios=state["ratios"],
+        sentiment=state["sentiment"],
+        valuation=state["valuation"],
+        previous_report=state["report"],
+        revision_instructions=state["revision_instructions"],
+    )
     updates: dict[str, object] = {
         "report": report,
         "revision_instructions": None,
         "messages": ["report_writer: completed"],
     }
-    if errors:
-        updates["errors"] = errors
     if state["first_report"] is None:
         updates["first_report"] = report
     return updates
@@ -133,7 +109,7 @@ def _source_urls(state: AnalystTeamState) -> list[str]:
 
 
 def _critic_updates(state: AnalystTeamState, review: CriticReview) -> dict[str, object]:
-    needs_revision = review.score < _QUALITY_THRESHOLD
+    needs_revision = review.score < CRITIC_QUALITY_THRESHOLD
     revision_count = state["revision_count"] + 1 if needs_revision else state["revision_count"]
     quality_flag = None
     if not needs_revision:

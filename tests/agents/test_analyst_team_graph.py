@@ -394,7 +394,7 @@ async def test_critic_loop_stops_at_three_revision_reviews(
 
 
 @pytest.mark.asyncio
-async def test_initial_report_writer_failure_uses_fallback_draft_for_critic_revision(
+async def test_initial_report_writer_failure_propagates_clear_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_run_supervisor_analysis(
@@ -414,22 +414,44 @@ async def test_initial_report_writer_failure_uses_fallback_draft_for_critic_revi
     async def fake_run_valuation(ticker: str) -> ValuationResult:
         return _valuation()
 
-    report_calls = 0
+    async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
+        raise ValueError("structured output failed")
+
+    monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
+    monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
+    monkeypatch.setattr(analyst_team_graph, "run_valuation", fake_run_valuation)
+    monkeypatch.setattr(analyst_team_graph, "run_report_writer", fake_run_report_writer)
+
+    with pytest.raises(ValueError, match="structured output failed"):
+        await analyst_team_graph.run_team_analysis("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_critic_failure_routes_to_hitl_with_quality_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_supervisor_analysis(
+        ticker: str, *, thread_id: str | None = None, config: object = None
+    ) -> dict[str, object]:
+        return {
+            "ticker": ticker,
+            "financials": _financials(),
+            "ratios": _ratios(),
+            "messages": [],
+            "errors": [],
+        }
+
+    async def fake_run_news_sentiment(ticker: str) -> NewsSentimentResult:
+        return _sentiment()
+
+    async def fake_run_valuation(ticker: str) -> ValuationResult:
+        return _valuation()
 
     async def fake_run_report_writer(**kwargs: object) -> AnalystReport:
-        nonlocal report_calls
-        report_calls += 1
-        if report_calls == 1:
-            raise ValueError("structured output failed")
-        return _report().model_copy(update={"executive_summary": "revised"})
-
-    reviews = [
-        CriticReview(score=0.2, verdict="revise", revision_instructions="Regenerate report."),
-        CriticReview(score=0.9, verdict="accept", revision_instructions=""),
-    ]
+        return _report()
 
     async def fake_run_report_critic(**kwargs: object) -> CriticReview:
-        return reviews.pop(0)
+        raise TimeoutError("critic unavailable")
 
     monkeypatch.setattr(analyst_team_graph, "run_supervisor_analysis", fake_run_supervisor_analysis)
     monkeypatch.setattr(analyst_team_graph, "run_news_sentiment", fake_run_news_sentiment)
@@ -439,7 +461,8 @@ async def test_initial_report_writer_failure_uses_fallback_draft_for_critic_revi
 
     result = await analyst_team_graph.run_team_analysis("AAPL")
 
-    assert report_calls == 2
-    assert result["report"].executive_summary == "revised"
-    assert result["first_report"].executive_summary.startswith("Report draft unavailable")
-    assert any("structured output failed" in error for error in result["errors"])
+    assert result["hitl_status"] == "ready"
+    assert result["quality_flag"] == "critic_failed"
+    assert result["critic_review"] == CriticReview(
+        score=0.0, verdict="accept", revision_instructions="Critic failed: critic unavailable"
+    )

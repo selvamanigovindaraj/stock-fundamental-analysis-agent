@@ -173,10 +173,10 @@ mock the LLM):
 3. The Critic Agent (`app/agents/report_critic_graph.py`) uses DeepSeek structured output
    with the same non-thinking routing model constraint as the other structured-output agents.
    Live verify found `Report-Writer` can still return `None` twice for a ticker; the direct
-   `run_report_writer(...)` API still raises clearly, but the analyst-team graph keeps a
-   fallback draft so the bounded critic loop can revise instead of aborting the whole run.
+   `run_report_writer(...)` API raises clearly, and the analyst-team graph lets terminal
+   report-writer failures propagate instead of substituting a meaningless fallback report.
    Latest 10-ticker critic eval (`uv run python scripts/evaluate_critic_loop.py`) measured
-   average first-draft→final score improvement of **+0.27**, above the +0.10 gate; some
+   average first-draft→final score improvement of **+0.19**, above the +0.10 gate; some
    tickers still hit `max_revisions_reached` and proceed with the best draft.
 4. The verification script's own "sequential baseline" measurement was comparing unequal
    work (only timing 2 of the 5 agents against the full 5-agent parallel run), making its

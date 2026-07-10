@@ -28,11 +28,17 @@ async def main() -> None:
 
         improvements: list[float] = []
         for ticker in TICKERS:
-            result = await run_team_analysis(ticker, thread_id=f"{ticker}:critic-eval:{uuid4().hex}")
-            first = result["first_critic_review"]
-            final = result["critic_review"]
-            if first is None or final is None:
-                raise RuntimeError(f"{ticker}: missing critic scores")
+            try:
+                result = await run_team_analysis(
+                    ticker, thread_id=f"{ticker}:critic-eval:{uuid4().hex}"
+                )
+                first = result["first_critic_review"]
+                final = result["critic_review"]
+                if first is None or final is None:
+                    raise RuntimeError("missing critic scores")
+            except Exception as exc:  # noqa: BLE001 - keep evaluating the remaining tickers
+                print(f"{ticker:6s} FAILED: {exc}")
+                continue
             improvement = final.score - first.score
             improvements.append(improvement)
             print(
@@ -40,6 +46,8 @@ async def main() -> None:
                 f"improvement={improvement:+.2f} flag={result['quality_flag']}"
             )
 
+        if not improvements:
+            raise SystemExit("no critic-loop evaluations succeeded")
         average = sum(improvements) / len(improvements)
         print(f"\naverage improvement: {average:+.2f}")
         if average < MIN_AVERAGE_IMPROVEMENT:

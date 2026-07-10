@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from app.config import get_settings
-from app.models import AnalystReport, CriticReview, FundamentalRatios
+from app.models import AnalystReport, CRITIC_QUALITY_THRESHOLD, CriticReview, FundamentalRatios
 
 
 _critic_llm: Runnable[str, CriticReview] | None = None
@@ -35,18 +35,25 @@ def _critic_prompt(
     ratios: FundamentalRatios | None,
     source_urls: list[str],
 ) -> str:
+    ratios_rubric = (
+        "1. numerical accuracy: every figure in the report must match the ratios object.\n"
+        if ratios is not None
+        else "1. numerical accuracy: verify internal consistency of figures "
+        "(no ratios object is available for comparison).\n"
+    )
+    ratios_data = f"Ratios object: {ratios}\n\n" if ratios is not None else ""
     return (
         f"Review this analyst report draft for {ticker}.\n\n"
         "Rubric, score 0.0 to 1.0:\n"
-        "1. numerical accuracy: every figure in the report must match the ratios object.\n"
+        f"{ratios_rubric}"
         "2. completeness: executive_summary, financial_health, valuation_assessment, "
         "risk_factors, key_themes, and disclaimer must be present.\n"
         "3. grounding: narrative claims should cite available EDGAR filing or news source "
         "URLs. If filing URLs are unavailable in the inputs, penalize uncited filing claims.\n"
         "4. disclaimer: required investment-advice disclaimer must be present.\n\n"
-        "Return accept only when score is at least 0.80. Otherwise return revise with "
-        "specific revision_instructions.\n\n"
-        f"Ratios object: {ratios}\n\n"
+        f"Return accept only when score is at least {CRITIC_QUALITY_THRESHOLD:.2f}. "
+        "Otherwise return revise with specific revision_instructions.\n\n"
+        f"{ratios_data}"
         f"Available source URLs: {source_urls}\n\n"
         f"Report draft: {report}"
     )
