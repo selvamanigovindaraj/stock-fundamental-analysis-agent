@@ -10,40 +10,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from app.agents import supervisor_graph
-from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
+from app.models import FinancialStatements
 from app.services.financial_sources import SourceUnavailableError
 from app.services.ratio_engine import RatioEngine
+from tests.conftest import make_financial_statements
 
 
 def _statements() -> FinancialStatements:
-    return FinancialStatements(
-        ticker="AAPL",
-        source="yfinance",
-        is_gaap=False,
-        income_statement=IncomeStatement(
-            period_end="2025-09-30",
-            total_revenue=100.0,
-            cost_of_revenue=40.0,
-            gross_profit=60.0,
-            operating_income=30.0,
-            interest_expense=2.0,
-            net_income=20.0,
-        ),
-        balance_sheet=BalanceSheet(
-            period_end="2025-09-30",
-            total_current_assets=50.0,
-            inventory=10.0,
-            total_current_liabilities=25.0,
-            total_assets=200.0,
-            total_liabilities=80.0,
-            total_debt=60.0,
-            total_equity=120.0,
-            cash_and_equivalents=15.0,
-        ),
-        cash_flow=CashFlowStatement(
-            period_end="2025-09-30", operating_cash_flow=35.0, capital_expenditures=5.0
-        ),
-    )
+    return make_financial_statements()
 
 
 class _FakeRoutingLLM:
@@ -92,6 +66,42 @@ async def test_run_supervisor_analysis_before_init_raises_clear_error(
 
     with pytest.raises(AssertionError, match="init_supervisor_graph"):
         await supervisor_graph.run_supervisor_analysis("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_run_supervisor_analysis_merges_caller_config_preserving_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a caller (e.g. the outer analyst-team graph) passes its own `config`, the
+    thread_id must be overridden to the caller-supplied value while everything else
+    (callbacks, run metadata) is preserved -- otherwise LangSmith traces for the reused
+    supervisor subgraph would appear as unrelated top-level runs instead of nesting under
+    the caller's own run."""
+    captured: dict[str, object] = {}
+
+    class _FakeCompiledGraph:
+        async def ainvoke(self, state: object, config: object) -> object:
+            captured["config"] = config
+            return {
+                "ticker": "AAPL",
+                "financials": None,
+                "ratios": {"fake": "ratios"},
+                "messages": [],
+                "errors": [],
+                "visited": [],
+            }
+
+    monkeypatch.setattr(supervisor_graph, "_compiled_graph", _FakeCompiledGraph())
+
+    caller_config = {"callbacks": ["fake-callback"], "configurable": {"other_key": "x"}}
+    await supervisor_graph.run_supervisor_analysis(
+        "AAPL", thread_id="AAPL:financials", config=caller_config
+    )
+
+    merged = captured["config"]
+    assert merged["callbacks"] == ["fake-callback"]
+    assert merged["configurable"]["other_key"] == "x"
+    assert merged["configurable"]["thread_id"] == "AAPL:financials"
 
 
 @pytest.mark.asyncio

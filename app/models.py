@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Document(BaseModel):
@@ -132,3 +134,88 @@ class FundamentalRatios(BaseModel):
     asset_turnover: float
     free_cash_flow: float
     operating_cash_flow_ratio: float
+
+
+class ArticleSentiment(BaseModel):
+    """LLM-scored sentiment for a single news article."""
+
+    title: str
+    url: str
+    sentiment: Literal["positive", "neutral", "negative"]
+    score: float = Field(ge=0.0, le=1.0)  # 0.0 (most negative) .. 1.0 (most positive)
+
+
+class NewsSentimentResult(BaseModel):
+    """Aggregated sentiment across a ticker's recent news, with per-article detail."""
+
+    ticker: str
+    sentiment: Literal["positive", "neutral", "negative"]
+    score: float = Field(ge=0.0, le=1.0)  # same 0.0-1.0 scale as ArticleSentiment
+    key_themes: list[str]
+    articles: list[ArticleSentiment]
+
+
+class SectorBenchmark(BaseModel):
+    """Live-fetched sector-peer median P/E, P/B, and ROE for a ticker's sector."""
+
+    sector: str
+    median_pe: float | None
+    median_pb: float | None
+    median_roe: float | None
+    peers_used: list[str]
+    errors: list[str] = []
+
+
+class ValuationResult(BaseModel):
+    """A ticker's valuation verdict vs. its sector-peer benchmark."""
+
+    ticker: str
+    valuation_verdict: Literal["undervalued", "fairly_valued", "overvalued", "insufficient_data"]
+    vs_sector: dict[str, float | None]  # keys: "pe", "pb", "roe" -> ticker/sector-median ratio
+    risk_flags: list[str]
+
+
+def _coerce_str_list(value: object) -> object:
+    # DeepSeek's structured output occasionally returns a JSON-stringified array or a
+    # numbered/bulleted multiline string instead of a real list for these fields (found via
+    # live verify-agent: 5/10 real ticker reports hit this and crashed after ~20s of prior
+    # agent work) -- tolerate the common shapes rather than hard-failing the whole report.
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("[") and stripped.endswith("]"):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if len(lines) > 1:
+        # Only strip an actual bullet ("-"/"*") or a number followed by "." or ")" -- the
+        # original `^[-*\d]+[.)]?\s*` pattern also matched leading digits with no delimiter
+        # at all, corrupting text like "10-K reports..." into "K reports..." (caught in PR
+        # review).
+        return [re.sub(r"^(?:[-*]\s*|\d+[.)]\s*)", "", line) for line in lines]
+    return [stripped]
+
+
+class AnalystReport(BaseModel):
+    """Final structured analyst report produced by the Report-Writer agent."""
+
+    ticker: str
+    executive_summary: str
+    financial_health: str
+    valuation_assessment: str
+    risk_factors: list[str]
+    key_themes: list[str]
+    disclaimer: str
+
+    @field_validator("risk_factors", "key_themes", mode="before")
+    @classmethod
+    def _coerce_list_fields(cls, v: object) -> object:
+        return _coerce_str_list(v)

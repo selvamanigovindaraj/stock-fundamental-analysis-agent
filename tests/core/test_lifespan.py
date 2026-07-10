@@ -33,6 +33,7 @@ async def test_lifespan_opens_pool_inits_graph_and_closes_pool_on_exit(
     open_calls: list[str] = []
     close_calls: list[object] = []
     init_calls: list[object] = []
+    init_team_calls: list[object] = []
 
     async def fake_open_pool(url: str) -> object:
         open_calls.append(url)
@@ -44,15 +45,20 @@ async def test_lifespan_opens_pool_inits_graph_and_closes_pool_on_exit(
     def fake_init_supervisor_graph(checkpointer: object) -> None:
         init_calls.append(checkpointer)
 
+    def fake_init_analyst_team_graph(checkpointer: object) -> None:
+        init_team_calls.append(checkpointer)
+
     monkeypatch.setattr(lifespan_module, "open_pool", fake_open_pool)
     monkeypatch.setattr(lifespan_module, "close_pool", fake_close_pool)
     monkeypatch.setattr(lifespan_module, "AsyncPostgresSaver", _FakePostgresSaver)
     monkeypatch.setattr(lifespan_module, "init_supervisor_graph", fake_init_supervisor_graph)
+    monkeypatch.setattr(lifespan_module, "init_analyst_team_graph", fake_init_analyst_team_graph)
 
     async with lifespan_module.lifespan(app=object()):  # type: ignore[arg-type]
         assert open_calls  # pool opened before yield
         assert _FakePostgresSaver.instances[0].setup_called
         assert init_calls == [_FakePostgresSaver.instances[0]]
+        assert init_team_calls == [_FakePostgresSaver.instances[0]]  # same checkpointer, one pool
         assert close_calls == []  # not closed until after the context exits
 
     assert close_calls == [fake_pool]

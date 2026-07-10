@@ -180,14 +180,29 @@ def init_supervisor_graph(checkpointer: BaseCheckpointSaver) -> None:
     _compiled_graph = build_supervisor_graph(checkpointer)
 
 
-async def run_supervisor_analysis(ticker: str, *, thread_id: str | None = None) -> SupervisorState:
+async def run_supervisor_analysis(
+    ticker: str, *, thread_id: str | None = None, config: RunnableConfig | None = None
+) -> SupervisorState:
     """Supervisor entry point: ticker in, final SupervisorState out. Raises
     SourceUnavailableError if data ingestion never produced financials (mirroring
-    run_ingestion's own contract) -- callers never see a silently half-populated result."""
+    run_ingestion's own contract) -- callers never see a silently half-populated result.
+
+    `config` lets a caller (e.g. the outer analyst-team graph, reusing this whole
+    supervisor as a black-box branch) pass its own RunnableConfig through -- thread_id is
+    still overridden to the caller-supplied value (so this subgraph's checkpoints land in
+    a distinct thread from the caller's own), but callbacks/run metadata are preserved, so
+    LangSmith traces nest this run under the caller's instead of appearing top-level."""
     assert _compiled_graph is not None, (
         "init_supervisor_graph() must be called before run_supervisor_analysis()"
     )
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id or ticker}}
+    merged_config: RunnableConfig = {
+        **(config or {}),
+        "configurable": {
+            **(config or {}).get("configurable", {}),
+            "thread_id": thread_id or ticker,
+        },
+    }
+    config = merged_config
     initial_state: SupervisorState = {
         "ticker": ticker,
         "financials": None,

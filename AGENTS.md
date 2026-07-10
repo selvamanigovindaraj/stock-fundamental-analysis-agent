@@ -25,7 +25,7 @@ Frontend: http://localhost:5174
 ## Conventions
 
 - Backend imports use the `app.*` prefix; run uvicorn from the project root (`uvicorn app.main:app`).
-- Everything is currently a stub (`raise NotImplementedError` / `pass`) — see `.claude/rules/` for style and testing conventions.
+- Everything is currently a stub (`raise NotImplementedError` / `pass`) — see `.Codex/rules/` for style and testing conventions.
 
 ## Multi-Agent Supervisor (Data Ingestion + Ratio Analysis)
 

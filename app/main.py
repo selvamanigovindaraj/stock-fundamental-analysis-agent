@@ -12,8 +12,19 @@ os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
+from app.config import get_settings  # noqa: E402
 from app.core.lifespan import lifespan  # noqa: E402
 from app.routers import core, streaming  # noqa: E402
+
+_settings = get_settings()
+if _settings.langsmith_api_key:
+    # Enables LangChain's global callback manager to auto-trace every LLM/graph run (e.g.
+    # the analyst team's parallel branches) with no per-call code changes. Degrades to no
+    # tracing, not a crash, if unconfigured -- matches this project's established
+    # graceful-degradation posture elsewhere (LangSmith fallback logging, GAAP flag, etc).
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = _settings.langsmith_api_key
+    os.environ["LANGCHAIN_PROJECT"] = _settings.langsmith_project
 
 app = FastAPI(title="Multi Agent Stock Fundamental Analyser", lifespan=lifespan)
 
