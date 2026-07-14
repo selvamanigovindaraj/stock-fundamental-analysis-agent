@@ -7,7 +7,8 @@ import pytest
 from app.agents import ingestion_graph
 from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
 from app.services.financial_sources import SourceUnavailableError
-from app.services.financial_sources import edgartools_source, sec_edgar_source, yfinance_source
+from app.services.financial_sources import sec_edgar_source, yfinance_source
+from app.services import xbrl_cache
 
 
 def _statements(source: str) -> FinancialStatements:
@@ -47,38 +48,40 @@ def _mock_tracer(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_yfinance_success_short_circuits(monkeypatch: pytest.MonkeyPatch, _mock_tracer: MagicMock) -> None:
-    async def fake_fetch(ticker: str) -> FinancialStatements:
-        return _statements("yfinance")
-
-    monkeypatch.setattr(yfinance_source, "fetch_financials", fake_fetch)
-
-    result = await ingestion_graph.run_ingestion("AAPL")
-
-    assert result.source == "yfinance"
-    _mock_tracer.log_fallback.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_falls_through_to_edgartools_and_logs_once(
+async def test_edgar_cache_success_short_circuits(
     monkeypatch: pytest.MonkeyPatch, _mock_tracer: MagicMock
 ) -> None:
-    async def yfinance_fails(ticker: str) -> FinancialStatements:
-        raise SourceUnavailableError("yfinance down")
-
-    async def edgartools_succeeds(ticker: str) -> FinancialStatements:
+    async def fake_fetch(ticker: str) -> FinancialStatements:
         return _statements("edgartools")
 
-    monkeypatch.setattr(yfinance_source, "fetch_financials", yfinance_fails)
-    monkeypatch.setattr(edgartools_source, "fetch_financials", edgartools_succeeds)
+    monkeypatch.setattr(xbrl_cache, "fetch_financials", fake_fetch)
 
     result = await ingestion_graph.run_ingestion("AAPL")
 
     assert result.source == "edgartools"
+    _mock_tracer.log_fallback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_falls_through_to_sec_and_logs_once(
+    monkeypatch: pytest.MonkeyPatch, _mock_tracer: MagicMock
+) -> None:
+    async def cache_fails(ticker: str) -> FinancialStatements:
+        raise SourceUnavailableError("cache down")
+
+    async def sec_succeeds(ticker: str) -> FinancialStatements:
+        return _statements("sec_edgar")
+
+    monkeypatch.setattr(xbrl_cache, "fetch_financials", cache_fails)
+    monkeypatch.setattr(sec_edgar_source, "fetch_financials", sec_succeeds)
+
+    result = await ingestion_graph.run_ingestion("AAPL")
+
+    assert result.source == "sec_edgar"
     _mock_tracer.log_fallback.assert_called_once()
     call_kwargs = _mock_tracer.log_fallback.call_args.kwargs
-    assert call_kwargs["from_source"] == "yfinance"
-    assert call_kwargs["to_source"] == "edgartools"
+    assert call_kwargs["from_source"] == "edgartools"
+    assert call_kwargs["to_source"] == "sec_edgar"
 
 
 @pytest.mark.asyncio
@@ -89,7 +92,7 @@ async def test_all_sources_fail_raises_and_logs_twice(
         raise SourceUnavailableError("nope")
 
     monkeypatch.setattr(yfinance_source, "fetch_financials", always_fails)
-    monkeypatch.setattr(edgartools_source, "fetch_financials", always_fails)
+    monkeypatch.setattr(xbrl_cache, "fetch_financials", always_fails)
     monkeypatch.setattr(sec_edgar_source, "fetch_financials", always_fails)
 
     with pytest.raises(SourceUnavailableError):
@@ -106,15 +109,35 @@ async def test_partial_data_at_adapter_level_counts_as_failure(
     contract) rather than returning a half-populated FinancialStatements — this falls
     through to the next tier exactly like a network failure would."""
 
-    async def yfinance_partial(ticker: str) -> FinancialStatements:
+    async def cache_partial(ticker: str) -> FinancialStatements:
         raise SourceUnavailableError("balance sheet missing required rows")
 
-    async def edgartools_succeeds(ticker: str) -> FinancialStatements:
-        return _statements("edgartools")
+    async def sec_succeeds(ticker: str) -> FinancialStatements:
+        return _statements("sec_edgar")
 
-    monkeypatch.setattr(yfinance_source, "fetch_financials", yfinance_partial)
-    monkeypatch.setattr(edgartools_source, "fetch_financials", edgartools_succeeds)
+    monkeypatch.setattr(xbrl_cache, "fetch_financials", cache_partial)
+    monkeypatch.setattr(sec_edgar_source, "fetch_financials", sec_succeeds)
 
     result = await ingestion_graph.run_ingestion("AAPL")
 
-    assert result.source == "edgartools"
+    assert result.source == "sec_edgar"
+
+
+@pytest.mark.asyncio
+async def test_yfinance_is_the_final_fallback(
+    monkeypatch: pytest.MonkeyPatch, _mock_tracer: MagicMock
+) -> None:
+    async def fails(ticker: str) -> FinancialStatements:
+        raise SourceUnavailableError("unavailable")
+
+    async def yahoo_succeeds(ticker: str) -> FinancialStatements:
+        return _statements("yfinance")
+
+    monkeypatch.setattr(xbrl_cache, "fetch_financials", fails)
+    monkeypatch.setattr(sec_edgar_source, "fetch_financials", fails)
+    monkeypatch.setattr(yfinance_source, "fetch_financials", yahoo_succeeds)
+
+    result = await ingestion_graph.run_ingestion("AAPL")
+
+    assert result.source == "yfinance"
+    assert _mock_tracer.log_fallback.call_count == 2

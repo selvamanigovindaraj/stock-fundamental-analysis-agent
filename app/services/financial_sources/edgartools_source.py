@@ -6,6 +6,7 @@ import re
 
 import edgar
 import pandas as pd
+from edgar.financials import Financials
 
 from app.config import get_settings
 from app.models import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
@@ -70,24 +71,11 @@ def _optional_concept_value(
     return default if value is None else value
 
 
-async def fetch_financials(ticker: str) -> FinancialStatements:
-    """Fetch and normalize income statement, balance sheet, and cash flow via edgartools."""
-    ticker = sanitize_ticker(ticker)
-
-    def _fetch() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        edgar.set_identity(get_settings().sec_edgar_user_agent or "stock-fundamental-analyser research@example.com")
-        financials = edgar.Company(ticker).get_financials()
-        return (
-            financials.income_statement().to_dataframe(),
-            financials.balance_sheet().to_dataframe(),
-            financials.cash_flow_statement().to_dataframe(),
-        )
-
-    try:
-        income_df, balance_df, cashflow_df = await asyncio.to_thread(_fetch)
-    except Exception as exc:  # noqa: BLE001 - any vendor failure means "try the next source"
-        raise SourceUnavailableError(f"edgartools request failed: {exc}") from exc
-
+def normalize_financials(ticker: str, financials: Financials) -> FinancialStatements:
+    """Normalize one EdgarTools filing snapshot into the application's statement model."""
+    income_df = financials.income_statement().to_dataframe()
+    balance_df = financials.balance_sheet().to_dataframe()
+    cashflow_df = financials.cash_flow_statement().to_dataframe()
     if income_df.empty or balance_df.empty or cashflow_df.empty:
         raise SourceUnavailableError("edgartools returned an empty statement")
 
@@ -144,3 +132,22 @@ async def fetch_financials(ticker: str) -> FinancialStatements:
             capital_expenditures=_optional_concept_value(cashflow_df, cashflow_period, "CapitalExpenses"),
         ),
     )
+
+
+async def fetch_financials(ticker: str) -> FinancialStatements:
+    """Fetch and normalize income statement, balance sheet, and cash flow via edgartools."""
+    ticker = sanitize_ticker(ticker)
+
+    def _fetch() -> FinancialStatements:
+        edgar.set_identity(
+            get_settings().sec_edgar_user_agent
+            or "stock-fundamental-analyser research@example.com"
+        )
+        return normalize_financials(ticker, edgar.Company(ticker).get_financials())
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except SourceUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any vendor failure means "try the next source"
+        raise SourceUnavailableError(f"edgartools request failed: {exc}") from exc

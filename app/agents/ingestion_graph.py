@@ -8,8 +8,9 @@ from langgraph.graph.state import CompiledStateGraph
 from app.models import FinancialStatements
 from app.observability.tracer import Tracer
 from app.services.financial_sources import SourceUnavailableError
-from app.services.financial_sources import edgartools_source, sec_edgar_source, yfinance_source
+from app.services.financial_sources import sec_edgar_source, yfinance_source
 from app.services.guardrails import sanitize_ticker
+from app.services import xbrl_cache
 
 _tracer = Tracer()
 
@@ -24,7 +25,7 @@ async def _try_source(
 ) -> IngestionState:
     fetchers = {
         "yfinance": yfinance_source.fetch_financials,
-        "edgartools": edgartools_source.fetch_financials,
+        "edgartools": xbrl_cache.fetch_financials,
         "sec_edgar": sec_edgar_source.fetch_financials,
     }
     ticker = state["ticker"]
@@ -40,7 +41,7 @@ async def _try_source(
 
 
 async def _try_yfinance(state: IngestionState) -> IngestionState:
-    return await _try_source(state, source_name="yfinance", next_source="edgartools")
+    return await _try_source(state, source_name="yfinance", next_source=None)
 
 
 async def _try_edgartools(state: IngestionState) -> IngestionState:
@@ -48,28 +49,28 @@ async def _try_edgartools(state: IngestionState) -> IngestionState:
 
 
 async def _try_sec_edgar(state: IngestionState) -> IngestionState:
-    return await _try_source(state, source_name="sec_edgar", next_source=None)
-
-
-def _route_after_yfinance(state: IngestionState) -> str:
-    return END if state["financials"] is not None else "try_edgartools"
+    return await _try_source(state, source_name="sec_edgar", next_source="yfinance")
 
 
 def _route_after_edgartools(state: IngestionState) -> str:
     return END if state["financials"] is not None else "try_sec_edgar"
 
 
+def _route_after_sec_edgar(state: IngestionState) -> str:
+    return END if state["financials"] is not None else "try_yfinance"
+
+
 def build_ingestion_graph() -> CompiledStateGraph:
     """Build the DataIngestionAgent subgraph: ticker in, financials out. Fallback chain
-    (yfinance -> edgartools -> sec_edgar) is expressed as the graph edges themselves."""
+    (edgartools cache -> SEC companyfacts -> yfinance) is expressed as the graph edges."""
     graph = StateGraph(IngestionState)
     graph.add_node("try_yfinance", _try_yfinance)
     graph.add_node("try_edgartools", _try_edgartools)
     graph.add_node("try_sec_edgar", _try_sec_edgar)
-    graph.add_edge(START, "try_yfinance")
-    graph.add_conditional_edges("try_yfinance", _route_after_yfinance)
+    graph.add_edge(START, "try_edgartools")
     graph.add_conditional_edges("try_edgartools", _route_after_edgartools)
-    graph.add_edge("try_sec_edgar", END)
+    graph.add_conditional_edges("try_sec_edgar", _route_after_sec_edgar)
+    graph.add_edge("try_yfinance", END)
     return graph.compile()
 
 

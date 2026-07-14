@@ -204,6 +204,14 @@ transitions log locally via the standard `logging` module (visible in
 `docker compose logs backend` or stdout) instead of failing — that's the intended graceful
 degradation, not a bug.
 
+**SEC XBRL is now the accounting source of truth** (`edgartools/cache → direct SEC
+Company Facts → yfinance`). `app.services.xbrl_cache` reuses the lifespan-managed Postgres
+pool, creates `companies`/`filings`/`xbrl_facts` idempotently at startup, and refreshes on
+demand after a one-hour TTL. It retains all standardized Company Facts history plus detailed
+dimensions from the latest five 10-Ks and two 10-Qs; exact facts live in Postgres while filing
+narrative embeddings remain in Weaviate. Bulk psycopg writes must use
+`connection.cursor().executemany(...)`—`AsyncConnection` itself has no `executemany` method.
+
 **Banks/financial institutions (e.g. JPM) are now supported.** Their GAAP statements have no
 Cost of Revenue/Gross Profit/Operating Income concept (net interest income model instead) and
 no classified current/non-current balance sheet — these fields come back as `math.nan` (not
