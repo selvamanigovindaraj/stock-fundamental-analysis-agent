@@ -138,11 +138,15 @@ async def _guardrails(state: AnalystTeamState) -> dict[str, object]:
     if report is None:
         raise ValueError("guardrails invoked before report_writer produced a report")
 
-    unsupported_numbers = find_unsupported_report_numbers(report, state["ratios"])
+    unsupported_numbers = find_unsupported_report_numbers(
+        report, state["ratios"], state["financials"], state["valuation"]
+    )
     if unsupported_numbers:
         if state["revision_count"] + 1 >= _MAX_REVISIONS:
             return {
-                "report": redact_unsupported_report_numbers(report, state["ratios"]),
+                "report": redact_unsupported_report_numbers(
+                    report, state["ratios"], state["financials"], state["valuation"]
+                ),
                 "critic_review": CriticReview(
                     score=0.0,
                     verdict="revise",

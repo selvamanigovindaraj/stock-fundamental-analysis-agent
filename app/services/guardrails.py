@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from datetime import date
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from app.models import AnalystReport, FundamentalRatios
+    from app.models import AnalystReport, FinancialStatements, FundamentalRatios, ValuationResult
 
 
 class GuardrailViolation(ValueError):
@@ -17,7 +18,10 @@ class GuardrailViolation(ValueError):
 
 
 _TICKER_RE = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z])?$")
-_NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?(?![-A-Za-z])")
+_NUMBER_SUFFIX = "%xXbB"
+_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:%|x|B)?(?![-A-Za-z])", re.IGNORECASE
+)
 _URL_RE = re.compile(r"https?://\S+")
 _DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _NATURAL_DATE_RE = re.compile(
@@ -67,12 +71,30 @@ def _report_text(report: AnalystReport) -> str:
     return "\n".join(parts)
 
 
-def _ratio_numbers(ratios: FundamentalRatios) -> set[float]:
+def _numeric_leaves(value: object) -> Iterable[float]:
+    # Report figures can legitimately come from any of ratios/financials/valuation, and the
+    # latter two have nested sub-models (FinancialStatements.income_statement, etc.) and
+    # dicts (ValuationResult.vs_sector) rather than flat fields, so this walks recursively
+    # instead of assuming a flat model like the original ratios-only version did.
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int | float):
+        if math.isfinite(value):
+            yield float(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _numeric_leaves(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            yield from _numeric_leaves(item)
+
+
+def _model_numbers(model: BaseModel | None) -> set[float]:
     values: set[float] = set()
-    for value in ratios.model_dump().values():
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-            continue
-        raw = float(value)
+    if model is None:
+        return values
+    for raw in _numeric_leaves(model.model_dump()):
         for scaled in (raw, raw * 100, raw / 1_000_000, raw / 1_000_000_000):
             values.add(scaled)
     return values
@@ -85,27 +107,33 @@ def _supported(value: float, allowed: set[float]) -> bool:
 
 
 def find_unsupported_report_numbers(
-    report: AnalystReport, ratios: FundamentalRatios | None
+    report: AnalystReport,
+    ratios: FundamentalRatios | None,
+    financials: FinancialStatements | None = None,
+    valuation: ValuationResult | None = None,
 ) -> list[str]:
     if ratios is None:
         return []
-    allowed = _ratio_numbers(ratios)
+    allowed = _model_numbers(ratios) | _model_numbers(financials) | _model_numbers(valuation)
     text = _NATURAL_DATE_RE.sub("", _DATE_RE.sub("", _URL_RE.sub("", _report_text(report))))
     unsupported: list[str] = []
     for match in _NUMBER_RE.finditer(text):
         token = match.group(0)
-        value = float(token.rstrip("%").replace(",", ""))
+        value = float(token.rstrip(_NUMBER_SUFFIX).replace(",", ""))
         if not _supported(value, allowed):
-            unsupported.append(token.rstrip("%"))
+            unsupported.append(token.rstrip(_NUMBER_SUFFIX))
     return unsupported
 
 
 def redact_unsupported_report_numbers(
-    report: AnalystReport, ratios: FundamentalRatios | None
+    report: AnalystReport,
+    ratios: FundamentalRatios | None,
+    financials: FinancialStatements | None = None,
+    valuation: ValuationResult | None = None,
 ) -> AnalystReport:
     if ratios is None:
         return report
-    allowed = _ratio_numbers(ratios)
+    allowed = _model_numbers(ratios) | _model_numbers(financials) | _model_numbers(valuation)
 
     def redact_text(text: str) -> str:
         ignored_spans = [
@@ -119,7 +147,7 @@ def redact_unsupported_report_numbers(
             start, end = match.span()
             if any(istart <= start and end <= iend for istart, iend in ignored_spans):
                 return token
-            value = float(token.rstrip("%").replace(",", ""))
+            value = float(token.rstrip(_NUMBER_SUFFIX).replace(",", ""))
             return token if _supported(value, allowed) else "[unsupported figure removed]"
 
         return _NUMBER_RE.sub(replace, text)
