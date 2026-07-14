@@ -30,6 +30,8 @@ Frontend: http://localhost:5174
   must update both, and `tests/test_instruction_docs.py` enforces exact synchronization.
 - Before handing off work on an existing PR, inspect thread-aware unresolved review comments;
   flat conversation comments are not a complete review-status source.
+- Regression tests must force the intended branch and fail for the reported bug, restore any
+  mutated module globals, and use explicit UTF-8 for text fixtures and documentation.
 
 ## Multi-Agent Supervisor (Data Ingestion + Ratio Analysis)
 

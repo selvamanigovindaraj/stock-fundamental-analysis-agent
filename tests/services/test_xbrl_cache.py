@@ -78,7 +78,7 @@ def test_companyfacts_filing_metadata_uses_latest_period_in_accession() -> None:
             "fp": "FY",
             "val": year,
         }
-        for year in (2024, 2022, 2023)
+        for year in (2022, 2024, 2023)
     ]
     payload = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": values}}}}}
 
@@ -204,7 +204,10 @@ async def test_bulk_fact_upsert_uses_async_cursor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_setup_wraps_schema_creation_in_transaction() -> None:
+async def test_setup_wraps_schema_creation_in_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(xbrl_cache, "_pool", None)
     events: list[str] = []
 
     class FakeTransaction:
