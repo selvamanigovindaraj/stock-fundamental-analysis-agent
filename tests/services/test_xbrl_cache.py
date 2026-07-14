@@ -130,7 +130,7 @@ def test_detailed_extraction_selects_five_10ks_and_two_10qs(
 
     monkeypatch.setattr(xbrl_cache.edgar, "Company", lambda ticker: FakeCompany())
     monkeypatch.setattr(xbrl_cache.edgar, "set_identity", lambda identity: None)
-    monkeypatch.setattr(xbrl_cache.Financials, "extract", lambda filing: None)
+    monkeypatch.setattr(xbrl_cache, "Financials", lambda xbrl: None)
 
     filings, facts = xbrl_cache._selected_edgar_filings("AAPL")
 
@@ -143,14 +143,14 @@ def test_normalization_failure_skips_only_malformed_filing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     filing = type("Filing", (), {"form": "10-K", "accession_no": "bad-filing"})()
-    monkeypatch.setattr(xbrl_cache.Financials, "extract", lambda filing: object())
+    monkeypatch.setattr(xbrl_cache, "Financials", lambda xbrl: object())
     monkeypatch.setattr(
         xbrl_cache.edgartools_source,
         "normalize_financials",
         lambda ticker, financials: (_ for _ in ()).throw(ValueError("bad columns")),
     )
 
-    assert xbrl_cache._normalized_snapshot("AAPL", filing) is None
+    assert xbrl_cache._normalized_snapshot("AAPL", filing, object()) is None
 
 
 def test_dimensional_fact_without_concept_is_skipped() -> None:

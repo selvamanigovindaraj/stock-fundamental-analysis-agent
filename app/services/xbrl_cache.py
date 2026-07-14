@@ -273,10 +273,10 @@ def _companyfacts_rows(cik: str, payload: dict[str, Any]) -> tuple[list[_Filing]
     return list(filings.values()), facts
 
 
-def _normalized_snapshot(ticker: str, filing: Any) -> dict[str, Any] | None:
+def _normalized_snapshot(ticker: str, filing: Any, xbrl: Any) -> dict[str, Any] | None:
     if filing.form != "10-K":
         return None
-    financials = Financials.extract(filing)
+    financials = Financials(xbrl)
     if financials is None:
         return None
     try:
@@ -332,7 +332,7 @@ def _parse_edgar_filing(ticker: str, filing: Any) -> tuple[_Filing, list[_Fact]]
         fiscal_year=None,
         fiscal_period="FY" if filing.form == "10-K" else None,
         filing_url=str(filing.filing_url),
-        normalized_statements=_normalized_snapshot(ticker, filing),
+        normalized_statements=_normalized_snapshot(ticker, filing, xbrl),
     )
     return record, _dimensional_facts(accession_no, xbrl.facts.get_facts())
 
