@@ -146,12 +146,23 @@ class _Fact:
         return hashlib.sha256(identity.encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class _RefreshData:
+    cik: str
+    payload: dict[str, Any]
+    companyfacts_filings: list[_Filing]
+    companyfacts: list[_Fact]
+    detailed_filings: list[_Filing]
+    dimensional_facts: list[_Fact]
+
+
 async def setup(pool: AsyncConnectionPool[Any]) -> None:
     """Create the cache schema idempotently and register the shared application pool."""
     global _pool
     async with pool.connection() as connection:
-        for statement in _SCHEMA:
-            await connection.execute(statement)
+        async with connection.transaction():
+            for statement in _SCHEMA:
+                await connection.execute(statement)
     _pool = pool
 
 
@@ -233,18 +244,20 @@ def _companyfacts_rows(cik: str, payload: dict[str, Any]) -> tuple[list[_Filing]
         period_end = _date(value.get("end"))
         if not accession_no or filed_date is None or period_end is None:
             continue
-        filings[accession_no] = _Filing(
-            accession_no=accession_no,
-            form_type=str(value.get("form", "unknown")),
-            filed_date=filed_date,
-            period_end=period_end,
-            fiscal_year=value.get("fy") if isinstance(value.get("fy"), int) else None,
-            fiscal_period=str(value["fp"]) if value.get("fp") else None,
-            filing_url=(
-                f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-                f"{accession_no}-index.html"
-            ),
-        )
+        existing = filings.get(accession_no)
+        if existing is None or existing.period_end is None or period_end > existing.period_end:
+            filings[accession_no] = _Filing(
+                accession_no=accession_no,
+                form_type=str(value.get("form", "unknown")),
+                filed_date=filed_date,
+                period_end=period_end,
+                fiscal_year=value.get("fy") if isinstance(value.get("fy"), int) else None,
+                fiscal_period=str(value["fp"]) if value.get("fp") else None,
+                filing_url=(
+                    f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                    f"{accession_no}-index.html"
+                ),
+            )
         parsed = _fact(
             accession_no=accession_no,
             taxonomy=taxonomy,
@@ -268,7 +281,10 @@ def _normalized_snapshot(ticker: str, filing: Any) -> dict[str, Any] | None:
         return None
     try:
         return edgartools_source.normalize_financials(ticker, financials).model_dump(mode="json")
-    except SourceUnavailableError:
+    except Exception as exc:  # noqa: BLE001 - one malformed filing must not abort the batch
+        logger.warning(
+            "failed to normalize %s filing %s: %s", ticker, filing.accession_no, exc
+        )
         return None
 
 
@@ -282,7 +298,10 @@ def _dimensional_facts(accession_no: str, raw_facts: list[dict[str, Any]]) -> li
         }
         if not dimensions:
             continue
-        taxonomy, concept = _concept_parts(str(raw["concept"]))
+        raw_concept = raw.get("concept")
+        if not raw_concept:
+            continue
+        taxonomy, concept = _concept_parts(str(raw_concept))
         parsed = _fact(
             accession_no=accession_no,
             taxonomy=taxonomy,
@@ -435,27 +454,45 @@ async def _upsert_facts(connection: Any, facts: list[_Fact]) -> None:
         )
 
 
-async def _refresh(connection: Any, ticker: str) -> FinancialStatements:
+async def _download_refresh_data(ticker: str) -> _RefreshData:
     cik, payload = await fetch_companyfacts(ticker)
+    companyfacts_filings, companyfacts = _companyfacts_rows(cik, payload)
+    detailed_filings, dimensional_facts = await asyncio.to_thread(
+        _selected_edgar_filings, ticker
+    )
+    return _RefreshData(
+        cik=cik,
+        payload=payload,
+        companyfacts_filings=companyfacts_filings,
+        companyfacts=companyfacts,
+        detailed_filings=detailed_filings,
+        dimensional_facts=dimensional_facts,
+    )
+
+
+async def _write_refresh(
+    connection: Any, ticker: str, refresh: _RefreshData
+) -> FinancialStatements:
+    cik = refresh.cik
     await connection.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (cik,))
     cached = await _cached(connection, ticker, datetime.now(timezone.utc) - _CACHE_TTL)
     if cached is not None:
         return cached
 
-    companyfacts_filings, companyfacts = _companyfacts_rows(cik, payload)
-    detailed_filings, dimensional_facts = await asyncio.to_thread(
-        _selected_edgar_filings, ticker
-    )
     await connection.execute(
         """
         INSERT INTO companies (cik, ticker, name)
         VALUES (%s, %s, %s)
         ON CONFLICT (cik) DO UPDATE SET ticker = EXCLUDED.ticker, name = EXCLUDED.name
         """,
-        (cik, ticker, payload.get("entityName")),
+        (cik, ticker, refresh.payload.get("entityName")),
     )
-    await _upsert_filings(connection, cik, [*companyfacts_filings, *detailed_filings])
-    await _upsert_facts(connection, [*companyfacts, *dimensional_facts])
+    await _upsert_filings(
+        connection,
+        cik,
+        [*refresh.companyfacts_filings, *refresh.detailed_filings],
+    )
+    await _upsert_facts(connection, [*refresh.companyfacts, *refresh.dimensional_facts])
     await connection.execute(
         "UPDATE companies SET last_checked_at = now() WHERE cik = %s", (cik,)
     )
@@ -475,13 +512,25 @@ async def fetch_financials(ticker: str) -> FinancialStatements:
         if cached is not None:
             return cached
         stale = await _cached(connection, ticker)
+
+    try:
+        refresh = await _download_refresh_data(ticker)
+    except Exception as exc:  # noqa: BLE001 - stale cache is the availability boundary
+        if stale is not None:
+            logger.warning("SEC fetch failed for %s; serving stale cache: %s", ticker, exc)
+            return stale
+        if isinstance(exc, SourceUnavailableError):
+            raise
+        raise SourceUnavailableError(f"Edgar fetch failed for {ticker}: {exc}") from exc
+
+    async with _pool.connection() as connection:
         try:
             async with connection.transaction():
-                return await _refresh(connection, ticker)
+                return await _write_refresh(connection, ticker, refresh)
         except Exception as exc:  # noqa: BLE001 - stale cache is the availability boundary
             if stale is not None:
-                logger.warning("SEC refresh failed for %s; serving stale cache: %s", ticker, exc)
+                logger.warning("SEC cache write failed for %s; serving stale cache: %s", ticker, exc)
                 return stale
             if isinstance(exc, SourceUnavailableError):
                 raise
-            raise SourceUnavailableError(f"Edgar cache refresh failed for {ticker}: {exc}") from exc
+            raise SourceUnavailableError(f"Edgar cache write failed for {ticker}: {exc}") from exc

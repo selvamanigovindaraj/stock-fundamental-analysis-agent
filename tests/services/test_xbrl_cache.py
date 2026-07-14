@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
+from typing import AsyncIterator
 
 import pytest
 
 from app.services import xbrl_cache
+from app.services.financial_sources import SourceUnavailableError
 
 
 def _fact(dimensions: dict[str, str]) -> xbrl_cache._Fact:
@@ -63,6 +66,29 @@ def test_companyfacts_rows_keep_complete_history_and_exact_values() -> None:
     assert all(fact.concept == "Revenues" for fact in facts)
 
 
+def test_companyfacts_filing_metadata_uses_latest_period_in_accession() -> None:
+    values = [
+        {
+            "accn": "same-accession",
+            "form": "10-K",
+            "filed": "2025-02-01",
+            "start": f"{year}-01-01",
+            "end": f"{year}-12-31",
+            "fy": year,
+            "fp": "FY",
+            "val": year,
+        }
+        for year in (2024, 2022, 2023)
+    ]
+    payload = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": values}}}}}
+
+    filings, _ = xbrl_cache._companyfacts_rows("0000320193", payload)
+
+    assert len(filings) == 1
+    assert filings[0].period_end == date(2024, 12, 31)
+    assert filings[0].fiscal_year == 2024
+
+
 def test_canonical_metric_preserves_bank_revenue_mapping() -> None:
     assert xbrl_cache._CANONICAL_METRICS["RevenuesNetOfInterestExpense"] == "revenue"
 
@@ -113,6 +139,30 @@ def test_detailed_extraction_selects_five_10ks_and_two_10qs(
     assert facts == []
 
 
+def test_normalization_failure_skips_only_malformed_filing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filing = type("Filing", (), {"form": "10-K", "accession_no": "bad-filing"})()
+    monkeypatch.setattr(xbrl_cache.Financials, "extract", lambda filing: object())
+    monkeypatch.setattr(
+        xbrl_cache.edgartools_source,
+        "normalize_financials",
+        lambda ticker, financials: (_ for _ in ()).throw(ValueError("bad columns")),
+    )
+
+    assert xbrl_cache._normalized_snapshot("AAPL", filing) is None
+
+
+def test_dimensional_fact_without_concept_is_skipped() -> None:
+    raw = {
+        "dim_us-gaap_ProductOrServiceAxis": "aapl_IPhoneMember",
+        "value": "100",
+        "period_end": "2025-12-31",
+    }
+
+    assert xbrl_cache._dimensional_facts("accession", [raw]) == []
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -151,3 +201,64 @@ async def test_bulk_fact_upsert_uses_async_cursor() -> None:
 
     assert len(calls) == 1
     assert calls[0][1][0][0] == _fact({}).key
+
+
+@pytest.mark.asyncio
+async def test_setup_wraps_schema_creation_in_transaction() -> None:
+    events: list[str] = []
+
+    class FakeTransaction:
+        async def __aenter__(self) -> None:
+            events.append("transaction-enter")
+
+        async def __aexit__(self, *args: object) -> None:
+            events.append("transaction-exit")
+
+    class FakeConnection:
+        def transaction(self) -> FakeTransaction:
+            return FakeTransaction()
+
+        async def execute(self, statement: str) -> None:
+            events.append("execute")
+
+    class FakePool:
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[FakeConnection]:
+            yield FakeConnection()
+
+    await xbrl_cache.setup(FakePool())  # type: ignore[arg-type]
+
+    assert events[0] == "transaction-enter"
+    assert events[-1] == "transaction-exit"
+    assert events.count("execute") == len(xbrl_cache._SCHEMA)
+
+
+@pytest.mark.asyncio
+async def test_network_refresh_runs_without_holding_pool_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_connections = 0
+
+    class FakePool:
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[object]:
+            nonlocal active_connections
+            active_connections += 1
+            try:
+                yield object()
+            finally:
+                active_connections -= 1
+
+    async def no_cache(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def fail_download(ticker: str) -> xbrl_cache._RefreshData:
+        assert active_connections == 0
+        raise SourceUnavailableError("SEC unavailable")
+
+    monkeypatch.setattr(xbrl_cache, "_pool", FakePool())
+    monkeypatch.setattr(xbrl_cache, "_cached", no_cache)
+    monkeypatch.setattr(xbrl_cache, "_download_refresh_data", fail_download)
+
+    with pytest.raises(SourceUnavailableError, match="SEC unavailable"):
+        await xbrl_cache.fetch_financials("AAPL")
