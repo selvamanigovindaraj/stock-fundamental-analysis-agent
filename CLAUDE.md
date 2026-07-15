@@ -25,7 +25,13 @@ Frontend: http://localhost:5174
 ## Conventions
 
 - Backend imports use the `app.*` prefix; run uvicorn from the project root (`uvicorn app.main:app`).
-- Everything is currently a stub (`raise NotImplementedError` / `pass`) — see `.claude/rules/` for style and testing conventions.
+- See `.claude/rules/` for style and testing conventions.
+- `AGENTS.md` and `CLAUDE.md` are mirrored instruction files; every documentation change
+  must update both, and `tests/test_instruction_docs.py` enforces exact synchronization.
+- Before handing off work on an existing PR, inspect thread-aware unresolved review comments;
+  flat conversation comments are not a complete review-status source.
+- Regression tests must force the intended branch and fail for the reported bug, restore any
+  mutated module globals, and use explicit UTF-8 for text fixtures and documentation.
 
 ## Multi-Agent Supervisor (Data Ingestion + Ratio Analysis)
 
@@ -113,19 +119,29 @@ earlier session silently served stale code (missing the new route entirely, 404s
 looking otherwise healthy. `docker compose up -d --build backend` after backend code
 changes, not just leaving an old container running, is required before verifying live.
 
-## 5-Agent Analyst Team (News/Sentiment + Valuation + Report-Writer)
+## Analyst Team (News/Sentiment + Valuation + Report-Writer + Critic)
 
 `app.agents.analyst_team_graph.run_team_analysis(ticker)` is a real, working
 implementation, wired to `GET /report/{ticker}/stream` (same SSE shape as the other two
-routes). Expands the 2-agent supervisor above into 5 agents: `Send`-based fan-out of
+routes). Expands the 2-agent supervisor above into an analyst team: `Send`-based fan-out of
 Data-Ingestion+Ratio-Analysis (the existing supervisor, reused unchanged as a black-box
-branch) and News/Sentiment, converging into Valuation then Report-Writer. **True 3-way
+branch) and News/Sentiment, converging into Valuation, Report-Writer, then Critic. **True 3-way
 parallelism is impossible** — Ratio Analysis needs Data Ingestion's own output — so the
 fan-out is 2-way (financials branch, news branch); Ratio Analysis runs sequentially inside
 the financials branch, which is fine since it's pure/fast (no I/O). No LLM-driven routing
 at the outer level (unlike the reused supervisor's own internal routing) — this pipeline's
 shape is fully deterministic, so static `Send`/edges are used instead, confirmed with the
 user rather than assumed.
+
+**Guardrail placement**: ticker sanitization is enforced at API/agent/tool boundaries, while
+final report output passes through deterministic guardrails between Report-Writer and Critic
+before HITL. Keep numeric hallucination/PII/disclaimer checks there rather than scattering
+LLM-specific checks through individual prompts; unsupported report figures become bounded
+revision requests through the existing critic loop, then are deterministically redacted after
+max revisions. This guarantee only holds when `ratios` is available — on a degraded
+financials branch (`SourceUnavailableError`, `ratios=None`), both guardrail checks
+intentionally no-op (nothing to validate numbers against), so a report on that path may still
+contain unverified figures; this is accepted, tested behavior, not a gap.
 
 **Checkpoint/trace nesting**: reusing the supervisor as a branch meant its
 `run_supervisor_analysis` needed a way to avoid colliding with the outer graph's own
@@ -170,7 +186,15 @@ mock the LLM):
    the whole report after ~20s of prior agent work. `NewsSentimentResult` has a similar,
    rarer failure mode (the LLM occasionally omits every field but `ticker`) that's already
    handled by `news_sentiment_graph.py`'s existing degrade-to-neutral path, not a new bug.
-3. The verification script's own "sequential baseline" measurement was comparing unequal
+3. The Critic Agent (`app/agents/report_critic_graph.py`) uses DeepSeek structured output
+   with the same non-thinking routing model constraint as the other structured-output agents.
+   Live verify found `Report-Writer` can still return `None` twice for a ticker; the direct
+   `run_report_writer(...)` API raises clearly, and the analyst-team graph lets terminal
+   report-writer failures propagate instead of substituting a meaningless fallback report.
+   Latest 10-ticker critic eval (`uv run python scripts/evaluate_critic_loop.py`) measured
+   average first-draft→final score improvement of **+0.19**, above the +0.10 gate; some
+   tickers still hit `max_revisions_reached` and proceed with the best draft.
+4. The verification script's own "sequential baseline" measurement was comparing unequal
    work (only timing 2 of the 5 agents against the full 5-agent parallel run), making its
    speedup number meaningless — fixed to run the same 5-agent total workload sequentially.
    Real, corrected result: **10/10 tickers passed, 19.0s average (well under the 120s
@@ -185,6 +209,21 @@ are real, working implementations, wired to `GET /fundamentals/{ticker}/stream` 
 transitions log locally via the standard `logging` module (visible in
 `docker compose logs backend` or stdout) instead of failing — that's the intended graceful
 degradation, not a bug.
+
+**SEC XBRL is now the accounting source of truth** (`edgartools/cache → direct SEC
+Company Facts → yfinance`). `app.services.xbrl_cache` reuses the lifespan-managed Postgres
+pool, creates `companies`/`filings`/`xbrl_facts` idempotently at startup, and refreshes on
+demand after a one-hour TTL. It retains all standardized Company Facts history plus detailed
+dimensions from the latest five 10-Ks and two 10-Qs; exact facts live in Postgres while filing
+narrative embeddings remain in Weaviate. Bulk psycopg writes must use
+`connection.cursor().executemany(...)`—`AsyncConnection` itself has no `executemany` method.
+SEC downloads and EdgarTools parsing must finish before checking out the write connection;
+keep the transaction limited to the advisory-lock recheck and atomic upserts so slow vendor
+I/O cannot starve the Postgres pool.
+For detailed 10-K/10-Q records, Edgar's `period_of_report` is authoritative; Company Facts can
+contain comparative periods and later instant facts under the same accession, so an older
+comparative fact must never overwrite filing metadata and a maximum fact date is not a safe
+replacement for the filing's actual reporting period.
 
 **Banks/financial institutions (e.g. JPM) are now supported.** Their GAAP statements have no
 Cost of Revenue/Gross Profit/Operating Income concept (net interest income model instead) and

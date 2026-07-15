@@ -74,6 +74,19 @@ async def _lookup_cik(client: httpx.AsyncClient, ticker: str) -> str:
     return _cik_cache[normalized]
 
 
+async def fetch_companyfacts(ticker: str) -> tuple[str, dict[str, Any]]:
+    """Return the ticker's CIK and complete SEC Company Facts payload."""
+    ticker = sanitize_ticker(ticker)
+    client = _get_client()
+    try:
+        cik = await _lookup_cik(client, ticker)
+        return cik, await _get_json(client, _COMPANYFACTS_URL.format(cik=cik))
+    except SourceUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - vendor failures use the shared source contract
+        raise SourceUnavailableError(f"SEC EDGAR request failed: {exc}") from exc
+
+
 def _dedupe_by_period(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse facts to one per fiscal period-end, keeping the latest-filed value
     (a restated period gets a new accession number but the same `end` date)."""
@@ -119,14 +132,7 @@ async def fetch_financials(ticker: str) -> FinancialStatements:
     """Fetch and normalize income statement, balance sheet, and cash flow via the direct
     SEC EDGAR companyfacts API."""
     ticker = sanitize_ticker(ticker)
-    client = _get_client()
-    try:
-        cik = await _lookup_cik(client, ticker)
-        payload = await _get_json(client, _COMPANYFACTS_URL.format(cik=cik))
-    except SourceUnavailableError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - any vendor failure means "try the next source"
-        raise SourceUnavailableError(f"SEC EDGAR request failed: {exc}") from exc
+    _, payload = await fetch_companyfacts(ticker)
 
     usgaap = payload.get("facts", {}).get("us-gaap", {})
 

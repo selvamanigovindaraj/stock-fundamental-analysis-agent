@@ -25,7 +25,13 @@ Frontend: http://localhost:5174
 ## Conventions
 
 - Backend imports use the `app.*` prefix; run uvicorn from the project root (`uvicorn app.main:app`).
-- Everything is currently a stub (`raise NotImplementedError` / `pass`) — see `.Codex/rules/` for style and testing conventions.
+- See `.claude/rules/` for style and testing conventions.
+- `AGENTS.md` and `CLAUDE.md` are mirrored instruction files; every documentation change
+  must update both, and `tests/test_instruction_docs.py` enforces exact synchronization.
+- Before handing off work on an existing PR, inspect thread-aware unresolved review comments;
+  flat conversation comments are not a complete review-status source.
+- Regression tests must force the intended branch and fail for the reported bug, restore any
+  mutated module globals, and use explicit UTF-8 for text fixtures and documentation.
 
 ## Multi-Agent Supervisor (Data Ingestion + Ratio Analysis)
 
@@ -203,6 +209,21 @@ are real, working implementations, wired to `GET /fundamentals/{ticker}/stream` 
 transitions log locally via the standard `logging` module (visible in
 `docker compose logs backend` or stdout) instead of failing — that's the intended graceful
 degradation, not a bug.
+
+**SEC XBRL is now the accounting source of truth** (`edgartools/cache → direct SEC
+Company Facts → yfinance`). `app.services.xbrl_cache` reuses the lifespan-managed Postgres
+pool, creates `companies`/`filings`/`xbrl_facts` idempotently at startup, and refreshes on
+demand after a one-hour TTL. It retains all standardized Company Facts history plus detailed
+dimensions from the latest five 10-Ks and two 10-Qs; exact facts live in Postgres while filing
+narrative embeddings remain in Weaviate. Bulk psycopg writes must use
+`connection.cursor().executemany(...)`—`AsyncConnection` itself has no `executemany` method.
+SEC downloads and EdgarTools parsing must finish before checking out the write connection;
+keep the transaction limited to the advisory-lock recheck and atomic upserts so slow vendor
+I/O cannot starve the Postgres pool.
+For detailed 10-K/10-Q records, Edgar's `period_of_report` is authoritative; Company Facts can
+contain comparative periods and later instant facts under the same accession, so an older
+comparative fact must never overwrite filing metadata and a maximum fact date is not a safe
+replacement for the filing's actual reporting period.
 
 **Banks/financial institutions (e.g. JPM) are now supported.** Their GAAP statements have no
 Cost of Revenue/Gross Profit/Operating Income concept (net interest income model instead) and

@@ -76,6 +76,9 @@ def fake_lifespan_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_close_pool(pool: object) -> None:
         pass
 
+    async def fake_setup_xbrl_cache(pool: object) -> None:
+        pass
+
     def fake_init_supervisor_graph(checkpointer: object) -> None:
         pass
 
@@ -84,6 +87,7 @@ def fake_lifespan_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(lifespan_module, "open_pool", fake_open_pool)
     monkeypatch.setattr(lifespan_module, "close_pool", fake_close_pool)
+    monkeypatch.setattr(lifespan_module, "setup_xbrl_cache", fake_setup_xbrl_cache)
     monkeypatch.setattr(lifespan_module, "AsyncPostgresSaver", _FakeCheckpointer)
     monkeypatch.setattr(lifespan_module, "init_supervisor_graph", fake_init_supervisor_graph)
     monkeypatch.setattr(lifespan_module, "init_analyst_team_graph", fake_init_analyst_team_graph)

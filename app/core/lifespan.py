@@ -10,6 +10,7 @@ from app.agents.analyst_team_graph import init_analyst_team_graph
 from app.agents.supervisor_graph import init_supervisor_graph
 from app.config import get_settings
 from app.db import close_pool, open_pool
+from app.services.xbrl_cache import setup as setup_xbrl_cache
 
 
 @asynccontextmanager
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # at runtime.
         checkpointer = AsyncPostgresSaver(conn=pool)  # type: ignore[arg-type]
         await checkpointer.setup()
+        await setup_xbrl_cache(pool)
         init_supervisor_graph(checkpointer)
         init_analyst_team_graph(checkpointer)
         yield
