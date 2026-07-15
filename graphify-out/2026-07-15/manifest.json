@@ -668,15 +668,5 @@
     "mtime": 1783990243.970138,
     "ast_hash": "d2414ef6db49602a25004f29433da754",
     "semantic_hash": "d2414ef6db49602a25004f29433da754"
-  },
-  ".claude/settings.json": {
-    "mtime": 1784074100.7578297,
-    "ast_hash": "3c2cc07e9ebdf7ac6c9c00003510d9e8",
-    "semantic_hash": ""
-  },
-  ".codex/hooks.json": {
-    "mtime": 1784074152.380539,
-    "ast_hash": "7a02bc6011eeabfd37b49dde5195adcf",
-    "semantic_hash": ""
   }
 }
