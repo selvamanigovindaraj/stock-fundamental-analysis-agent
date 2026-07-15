@@ -25,3 +25,4 @@ data/raw/*
 .DS_Store
 .vscode/
 .idea/
+graphify-out/
